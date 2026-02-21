@@ -429,42 +429,101 @@ except Exception as e:
   }
 }
 
-// ─── Step 6: Voice Rules ────────────────────────────────────────────────────
+// ─── Voice Picker ────────────────────────────────────────────────────────────
 
-async function step6_voiceRules() {
-  logStep(6, TOTAL_STEPS, "Setting up voice rules...");
+const DEFAULT_VOICES = [
+  { id: "am_eric", name: "Eric", desc: "male, American, confident" },
+  { id: "af_nova", name: "Nova", desc: "female, American, clear" },
+  { id: "am_onyx", name: "Onyx", desc: "male, American, deep" },
+  { id: "am_adam", name: "Adam", desc: "male, American, neutral" },
+  { id: "af_heart", name: "Heart", desc: "female, American, warm" },
+  { id: "am_fenrir", name: "Fenrir", desc: "male, American, bold" },
+  { id: "bf_emma", name: "Emma", desc: "female, British, polished" },
+  { id: "bm_george", name: "George", desc: "male, British, classic" },
+];
 
-  ensureDir(CLAUDE_AGENTS_DIR);
+async function pickVoice() {
+  console.log(`\n  ${BOLD}Choose your main agent voice:${RESET}`);
+  DEFAULT_VOICES.forEach((v, i) => {
+    console.log(`    ${i + 1}) ${v.name} ${DIM}(${v.id} — ${v.desc})${RESET}`);
+  });
+  console.log(`    ${DEFAULT_VOICES.length + 1}) Enter a custom voice ID`);
+  console.log("");
 
-  // Copy voice-rules.md template
-  if (fileExists(VOICE_RULES_DEST)) {
-    logOk("voice-rules.md already exists");
-  } else {
-    const src = path.join(PKG_DIR, "templates", "voice-rules.md");
-    const installSrc = path.join(INSTALL_DIR, "templates", "voice-rules.md");
-    const source = fileExists(src) ? src : fileExists(installSrc) ? installSrc : null;
+  const choice = await ask("  Select (1-" + (DEFAULT_VOICES.length + 1) + "): ");
+  const num = parseInt(choice);
 
-    if (source) {
-      fs.copyFileSync(source, VOICE_RULES_DEST);
-      logOk("Voice rules saved to ~/.claude/agents/voice-rules.md");
-    } else {
-      logWarn("voice-rules.md template not found — skipping");
-    }
+  if (num >= 1 && num <= DEFAULT_VOICES.length) {
+    return DEFAULT_VOICES[num - 1];
+  } else if (num === DEFAULT_VOICES.length + 1) {
+    const voiceId = await ask("  Enter voice ID (e.g., af_bella): ");
+    const name = voiceId.split("_").slice(1).join("_");
+    const capitalized = name.charAt(0).toUpperCase() + name.slice(1);
+    return { id: voiceId, name: capitalized, desc: "custom" };
   }
 
-  // Check if CLAUDE.md references voice-rules
-  const claudeMd = path.join(os.homedir(), ".claude", "CLAUDE.md");
-  if (fileExists(claudeMd)) {
-    const content = fs.readFileSync(claudeMd, "utf8");
-    if (content.includes("voice-rules")) {
-      logOk("CLAUDE.md already references voice-rules.md");
-    } else {
-      logInfo(
-        'Add this to your CLAUDE.md: See also: ~/.claude/agents/voice-rules.md'
-      );
+  return DEFAULT_VOICES[0]; // default to Eric
+}
+
+// ─── Step 6: Voice Rules ────────────────────────────────────────────────────
+
+async function step6_voiceRules(configuredIdes) {
+  logStep(6, TOTAL_STEPS, "Setting up voice rules...");
+
+  // Voice picker
+  const voice = await pickVoice();
+  const mainAgent = voice.name;
+
+  // Update config.json with chosen voice
+  if (fileExists(CONFIG_FILE)) {
+    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    config.tts.default_voice = voice.id;
+    config.main_agent = mainAgent;
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
+  }
+
+  logOk(`Main agent voice: ${mainAgent} (${voice.id})`);
+
+  // Import rule generators
+  const {
+    IDE_RULES,
+    generateVoiceRules,
+    generateCursorRule,
+    generateAppendBlock,
+    hasVoiceRulesBlock,
+    removeAppendBlock,
+  } = require("./utils");
+
+  // Write rules for each configured IDE
+  for (const ideKey of configuredIdes || []) {
+    const ruleConfig = IDE_RULES[ideKey];
+    if (!ruleConfig) continue;
+
+    if (ruleConfig.type === "file") {
+      // Standalone file (Cursor .mdc)
+      ensureDir(path.dirname(ruleConfig.path));
+      fs.writeFileSync(ruleConfig.path, generateCursorRule(mainAgent));
+      logOk(`${IDE_CONFIGS[ideKey].name}: voice rules written to ${ruleConfig.path}`);
+    } else if (ruleConfig.type === "append") {
+      // Append to existing file (CLAUDE.md, AGENTS.md)
+      ensureDir(path.dirname(ruleConfig.path));
+
+      let existing = "";
+      if (fileExists(ruleConfig.path)) {
+        existing = fs.readFileSync(ruleConfig.path, "utf8");
+      }
+
+      if (hasVoiceRulesBlock(existing)) {
+        // Replace existing block
+        const cleaned = removeAppendBlock(existing);
+        fs.writeFileSync(ruleConfig.path, cleaned + generateAppendBlock(mainAgent));
+        logOk(`${IDE_CONFIGS[ideKey].name}: voice rules updated in ${ruleConfig.path}`);
+      } else {
+        // Append
+        fs.writeFileSync(ruleConfig.path, existing + generateAppendBlock(mainAgent));
+        logOk(`${IDE_CONFIGS[ideKey].name}: voice rules added to ${ruleConfig.path}`);
+      }
     }
-  } else {
-    logInfo("No ~/.claude/CLAUDE.md found. Create one and reference voice-rules.md");
   }
 }
 
@@ -481,7 +540,7 @@ async function run() {
   await step3_models();
   const configuredIdes = await step4_mcpConfig(targetIdes);
   await step5_microphone();
-  await step6_voiceRules();
+  await step6_voiceRules(configuredIdes);
 
   const ideNames = (configuredIdes || [])
     .map((k) => IDE_CONFIGS[k]?.name || k)

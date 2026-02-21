@@ -310,6 +310,154 @@ function findModel(filename) {
   return null;
 }
 
+// ─── Voice Rules Generation ──────────────────────────────────────────────────
+
+const VOICE_RULES_SENTINEL = "<!-- installed by agent-voice-mcp -->";
+
+function generateVoiceRules(mainAgentName) {
+  // Read template and fill in the main agent name
+  const templatePath = path.join(PKG_DIR, "templates", "voice-rules.md");
+  const installTemplatePath = path.join(INSTALL_DIR, "templates", "voice-rules.md");
+  const tplPath = fileExists(templatePath) ? templatePath : installTemplatePath;
+
+  let content;
+  if (fileExists(tplPath)) {
+    content = fs.readFileSync(tplPath, "utf8");
+    content = content.replace(/\{\{MAIN_AGENT\}\}/g, mainAgentName);
+  } else {
+    // Fallback inline template
+    content = `# Voice Behavior Rules (Agent Voice MCP)
+
+You have access to voice tools via the Agent Voice MCP server.
+
+## Your Voice
+- You are **${mainAgentName}**. Always call \`speak\` with \`name: "${mainAgentName}"\` — this is your voice.
+- Do not use "${mainAgentName}" for sub-agents. Each agent needs its own unique name.
+
+## Speaking
+- Speak twice per response:
+  1. **Opening** — Brief acknowledgment when starting work. Use \`block: false\`.
+  2. **Closing** — Summary when done. Use \`block: true\`. Never skip this.
+- Keep spoken messages to 1-2 sentences. Write details, speak summaries.
+- Do not speak code, file paths, or long lists aloud.
+- Speak at transitions only: start, finish, error, question.
+
+## Listening
+- When asking a short-answer question, use \`speak_then_listen\`.
+- If listen times out or is cancelled, fall back to text. Do not retry.
+
+## Sub-Agents
+- Before assigning a name to a sub-agent, call \`get_voice_registry\` to see which names are taken and which voices are available.
+- Pick a name that matches an available Kokoro voice (e.g., af_nova → "Nova", am_fenrir → "Fenrir").
+- Each sub-agent must use its own unique name. Never reuse "${mainAgentName}".
+- On handoffs, both agents speak: outgoing announces, incoming acknowledges.
+
+## Fallback
+- If voice tools are not available, respond in text only.
+- If muted, \`speak\` succeeds silently. Do not call \`unmute\` unless asked.`;
+  }
+
+  return content;
+}
+
+function generateCursorRule(mainAgentName) {
+  return `---
+description: Voice interaction rules for Agent Voice MCP server
+globs:
+alwaysApply: true
+---
+
+${VOICE_RULES_SENTINEL}
+# Voice Behavior Rules (Agent Voice MCP)
+
+You have access to voice tools via the Agent Voice MCP server.
+
+## Your Voice
+- You are **${mainAgentName}**. Always call \`speak\` with \`name: "${mainAgentName}"\`.
+- Do not use "${mainAgentName}" for sub-agents.
+
+## Speaking
+- Speak twice per response:
+  1. **Opening** — Brief acknowledgment. Use \`block: false\`.
+  2. **Closing** — Summary when done. Use \`block: true\`. Never skip.
+- 1-2 sentences max. Write details, speak summaries. No code or paths aloud.
+- Speak at transitions: start, finish, error, question.
+
+## Listening
+- Use \`speak_then_listen\` for short-answer questions. Fall back to text on timeout.
+
+## Sub-Agents
+- Call \`get_voice_registry\` to find available voice names before assigning.
+- Pick names matching available Kokoro voices (e.g., af_nova → "Nova").
+- Never reuse "${mainAgentName}". On handoffs, both agents speak.
+
+## Fallback
+- No voice tools? Text only. Muted? Don't call \`unmute\` unless asked.
+`;
+}
+
+function generateAppendBlock(mainAgentName) {
+  // Block to append to CLAUDE.md or AGENTS.md
+  return `
+${VOICE_RULES_SENTINEL}
+# Voice Behavior Rules (Agent Voice MCP)
+
+You have access to voice tools via the Agent Voice MCP server.
+
+## Your Voice
+- You are **${mainAgentName}**. Always call \`speak\` with \`name: "${mainAgentName}"\`.
+- Do not use "${mainAgentName}" for sub-agents.
+
+## Speaking
+- Speak twice per response:
+  1. **Opening** — Brief acknowledgment. Use \`block: false\`.
+  2. **Closing** — Summary when done. Use \`block: true\`. Never skip.
+- 1-2 sentences max. Write details, speak summaries. No code or paths aloud.
+- Speak at transitions: start, finish, error, question.
+
+## Listening
+- Use \`speak_then_listen\` for short-answer questions. Fall back to text on timeout.
+
+## Sub-Agents
+- Call \`get_voice_registry\` to find available voice names before assigning.
+- Pick names matching available Kokoro voices (e.g., af_nova → "Nova").
+- Never reuse "${mainAgentName}". On handoffs, both agents speak.
+
+## Fallback
+- No voice tools? Text only. Muted? Don't call \`unmute\` unless asked.
+`;
+}
+
+function removeAppendBlock(content) {
+  // Remove everything from the sentinel to the next sentinel or end of file
+  const idx = content.indexOf(VOICE_RULES_SENTINEL);
+  if (idx === -1) return content;
+  // Find the next section that isn't ours (look for a line starting with # that isn't our header)
+  const block = content.substring(idx);
+  // Remove from sentinel to end, since it's always appended at the end
+  return content.substring(0, idx).trimEnd() + "\n";
+}
+
+function hasVoiceRulesBlock(content) {
+  return content.includes(VOICE_RULES_SENTINEL);
+}
+
+// IDE-specific rules paths
+const IDE_RULES = {
+  claude: {
+    path: path.join(os.homedir(), ".claude", "CLAUDE.md"),
+    type: "append", // append block to existing file
+  },
+  cursor: {
+    path: path.join(os.homedir(), ".cursor", "rules", "agent-voice.mdc"),
+    type: "file", // standalone file
+  },
+  codex: {
+    path: path.join(os.homedir(), ".codex", "AGENTS.md"),
+    type: "append", // append block to existing file
+  },
+};
+
 // ─── Readline Helper ─────────────────────────────────────────────────────────
 
 function ask(question) {
@@ -365,6 +513,15 @@ module.exports = {
   DIM,
   RESET,
   BOLD,
+
+  // Voice rules
+  VOICE_RULES_SENTINEL,
+  IDE_RULES,
+  generateVoiceRules,
+  generateCursorRule,
+  generateAppendBlock,
+  removeAppendBlock,
+  hasVoiceRulesBlock,
 
   // Helpers
   findPython,

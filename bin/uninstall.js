@@ -12,6 +12,9 @@ const {
   MCP_CONFIG_LEGACY,
   VOICE_RULES_DEST,
   IDE_CONFIGS,
+  IDE_RULES,
+  hasVoiceRulesBlock,
+  removeAppendBlock,
   logOk,
   logInfo,
   logWarn,
@@ -91,12 +94,34 @@ async function run() {
     } catch { /* ignore */ }
   }
 
-  // Remove voice rules
+  // Remove voice rules from IDE config files
+  for (const [key, rule] of Object.entries(IDE_RULES)) {
+    if (!fileExists(rule.path)) continue;
+
+    if (rule.type === "file") {
+      // Standalone file — just delete it
+      fs.unlinkSync(rule.path);
+      logOk(`Removed ${IDE_CONFIGS[key]?.name || key} voice rules`);
+    } else if (rule.type === "append") {
+      // Appended block — remove it from the file
+      const content = fs.readFileSync(rule.path, "utf8");
+      if (hasVoiceRulesBlock(content)) {
+        const cleaned = removeAppendBlock(content);
+        if (cleaned.trim().length === 0) {
+          fs.unlinkSync(rule.path);
+          logOk(`Removed ${rule.path} (was empty)`);
+        } else {
+          fs.writeFileSync(rule.path, cleaned);
+          logOk(`Removed voice rules from ${IDE_CONFIGS[key]?.name || key}`);
+        }
+      }
+    }
+  }
+
+  // Remove legacy voice-rules.md template
   if (fileExists(VOICE_RULES_DEST)) {
     fs.unlinkSync(VOICE_RULES_DEST);
-    logOk("Removed voice-rules.md");
-  } else {
-    logInfo("voice-rules.md already absent");
+    logOk("Removed voice-rules.md template");
   }
 
   console.log(
