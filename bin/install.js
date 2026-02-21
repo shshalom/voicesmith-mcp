@@ -173,7 +173,7 @@ async function step2_pythonEnv(python) {
     ["sounddevice", "sounddevice"],
     ["mcp", "mcp[cli]"],
     ["numpy", "numpy"],
-    ["torch", "torch"],
+    ["silero_vad", "silero-vad"],
   ];
 
   const missing = [];

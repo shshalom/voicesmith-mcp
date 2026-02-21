@@ -152,86 +152,78 @@ class TestWhisperEngine:
 
 
 class TestVoiceActivityDetector:
-    """Tests for VoiceActivityDetector."""
+    """Tests for VoiceActivityDetector (ONNX Runtime)."""
 
     def _make_vad(self, speech_prob=0.8):
-        """Create a VoiceActivityDetector with mocked torch/silero."""
-        mock_torch = MagicMock()
-        mock_model = MagicMock()
-        mock_model.return_value = MagicMock(item=MagicMock(return_value=speech_prob))
-        mock_torch.hub.load.return_value = (mock_model, None)
-        mock_torch.from_numpy.return_value = MagicMock()
+        """Create a VoiceActivityDetector with mocked onnxruntime."""
+        mock_ort = MagicMock()
+        mock_session = MagicMock()
+        # session.run returns [output, new_state]
+        mock_session.run.return_value = [
+            np.array([[speech_prob]], dtype=np.float32),
+            np.zeros((2, 1, 128), dtype=np.float32),
+        ]
+        mock_ort.InferenceSession.return_value = mock_session
 
-        with patch.dict("sys.modules", {"torch": mock_torch}):
-            from stt.vad import VoiceActivityDetector
-            vad = VoiceActivityDetector()
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+            with patch("stt.vad.VoiceActivityDetector._find_model", return_value="/fake/silero_vad.onnx"):
+                from stt.vad import VoiceActivityDetector
+                vad = VoiceActivityDetector()
 
-        # Store mock_torch so speech_probability can import it
-        vad._mock_torch = mock_torch
-        return vad, mock_model, mock_torch
+        return vad, mock_session
 
     def test_vad_loads_successfully(self):
-        vad, _, _ = self._make_vad()
+        vad, _ = self._make_vad()
         assert vad.is_loaded() is True
 
     def test_vad_load_failure(self):
-        mock_torch = MagicMock()
-        mock_torch.hub.load.side_effect = RuntimeError("failed to load")
-
-        with patch.dict("sys.modules", {"torch": mock_torch}):
-            from stt.vad import VoiceActivityDetector
-            with pytest.raises(VADError, match="Failed to load Silero VAD"):
-                VoiceActivityDetector()
+        mock_ort = MagicMock()
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+            with patch("stt.vad.VoiceActivityDetector._find_model", return_value=None):
+                from stt.vad import VoiceActivityDetector
+                with pytest.raises(VADError, match="not found"):
+                    VoiceActivityDetector()
 
     def test_is_speech_returns_bool_true(self):
-        vad, _, mock_torch = self._make_vad(speech_prob=0.8)
-
+        vad, _ = self._make_vad(speech_prob=0.8)
         chunk = np.zeros(512, dtype=np.float32)
-        with patch.dict("sys.modules", {"torch": mock_torch}):
-            result = vad.is_speech(chunk)
+        result = vad.is_speech(chunk)
         assert isinstance(result, bool)
         assert result is True
 
     def test_is_speech_returns_bool_false(self):
-        vad, _, mock_torch = self._make_vad(speech_prob=0.1)
-
+        vad, _ = self._make_vad(speech_prob=0.1)
         chunk = np.zeros(512, dtype=np.float32)
-        with patch.dict("sys.modules", {"torch": mock_torch}):
-            result = vad.is_speech(chunk)
+        result = vad.is_speech(chunk)
         assert result is False
 
     def test_speech_probability_returns_float(self):
-        vad, _, mock_torch = self._make_vad(speech_prob=0.65)
-
+        vad, _ = self._make_vad(speech_prob=0.65)
         chunk = np.zeros(512, dtype=np.float32)
-        with patch.dict("sys.modules", {"torch": mock_torch}):
-            prob = vad.speech_probability(chunk)
+        prob = vad.speech_probability(chunk)
         assert isinstance(prob, float)
         assert 0.0 <= prob <= 1.0
-        assert abs(prob - 0.65) < 1e-6
+        assert abs(prob - 0.65) < 0.01
 
     def test_speech_probability_with_bytes(self):
-        vad, _, mock_torch = self._make_vad(speech_prob=0.7)
-
+        vad, _ = self._make_vad(speech_prob=0.7)
         chunk_array = np.zeros(512, dtype=np.float32)
         chunk_bytes = chunk_array.tobytes()
-        with patch.dict("sys.modules", {"torch": mock_torch}):
-            prob = vad.speech_probability(chunk_bytes)
+        prob = vad.speech_probability(chunk_bytes)
         assert isinstance(prob, float)
 
     def test_reset(self):
-        vad, mock_model, _ = self._make_vad()
+        vad, _ = self._make_vad()
         vad.reset()
-        mock_model.reset_states.assert_called_once()
+        # After reset, state should be zeros
+        assert np.allclose(vad._state, np.zeros((2, 1, 128), dtype=np.float32))
 
     def test_not_loaded_raises(self):
-        vad, _, mock_torch = self._make_vad()
+        vad, _ = self._make_vad()
         vad._loaded = False
-
         chunk = np.zeros(512, dtype=np.float32)
-        with patch.dict("sys.modules", {"torch": mock_torch}):
-            with pytest.raises(VADError, match="not loaded"):
-                vad.speech_probability(chunk)
+        with pytest.raises(VADError, match="not loaded"):
+            vad.speech_probability(chunk)
 
 
 # ─── MicCapture Tests ────────────────────────────────────────────────────────
