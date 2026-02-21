@@ -65,6 +65,7 @@ class MicCapture:
                 samplerate=self._sample_rate,
                 channels=1,
                 dtype="float32",
+                blocksize=512,  # Silero VAD expects 512-sample chunks at 16kHz
                 callback=self._audio_callback,
             )
             stream.start()
