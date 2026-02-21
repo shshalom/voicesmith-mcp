@@ -19,7 +19,7 @@ const USAGE = `
 ${BOLD}🎙️  Agent Voice MCP — Local AI Voice System${RESET}
 
 ${BOLD}Usage:${RESET}
-  npx agent-voice-mcp ${DIM}<command>${RESET}
+  npx agent-voice-mcp ${DIM}<command> [options]${RESET}
 
 ${BOLD}Commands:${RESET}
   install     Full interactive setup (detects existing installs)
@@ -28,10 +28,19 @@ ${BOLD}Commands:${RESET}
   config      Change default voice or other settings
   uninstall   Remove everything cleanly
 
+${BOLD}Install Options:${RESET}
+  --claude    Configure for Claude Code
+  --cursor    Configure for Cursor
+  --codex     Configure for Codex (OpenAI)
+  --all       Configure for all supported IDEs
+
 ${BOLD}Examples:${RESET}
-  npx agent-voice-mcp install      ${DIM}# First-time setup${RESET}
-  npx agent-voice-mcp test         ${DIM}# Hear a sample voice${RESET}
-  npx agent-voice-mcp uninstall    ${DIM}# Clean removal${RESET}
+  npx agent-voice-mcp install              ${DIM}# Auto-detect IDEs${RESET}
+  npx agent-voice-mcp install --claude     ${DIM}# Claude Code only${RESET}
+  npx agent-voice-mcp install --cursor     ${DIM}# Cursor only${RESET}
+  npx agent-voice-mcp install --all        ${DIM}# All IDEs${RESET}
+  npx agent-voice-mcp test                 ${DIM}# Hear a sample voice${RESET}
+  npx agent-voice-mcp uninstall            ${DIM}# Clean removal${RESET}
 `;
 
 async function main() {

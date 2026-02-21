@@ -20,13 +20,15 @@ const {
   VENV_PIP,
   CONFIG_FILE,
   SERVER_PY,
-  MCP_CONFIG_USER,
-  MCP_CONFIG_LEGACY,
   CLAUDE_AGENTS_DIR,
   VOICE_RULES_DEST,
   PKG_DIR,
   KOKORO_MODEL_URL,
   KOKORO_VOICES_URL,
+  MCP_CONFIG_LEGACY,
+  IDE_CONFIGS,
+  parseIdeFlags,
+  detectInstalledIdes,
   logOk,
   logAction,
   logActionDone,
@@ -35,6 +37,9 @@ const {
   logInfo,
   logStep,
   logHeader,
+  BOLD,
+  RESET,
+  DIM,
   findPython,
   commandExists,
   runCommand,
@@ -42,9 +47,7 @@ const {
   dirExists,
   ensureDir,
   findModel,
-  readMcpConfig,
-  writeMcpConfig,
-  hasMcpEntry,
+  ask,
 } = require("./utils");
 
 const TOTAL_STEPS = 6;
@@ -318,28 +321,76 @@ async function step3_models() {
   logInfo("whisper-base model (~150MB) will download automatically on first use");
 }
 
-// ─── Step 4: MCP Config ─────────────────────────────────────────────────────
+// ─── Step 4: MCP Config (IDE picker) ─────────────────────────────────────────
 
-async function step4_mcpConfig() {
+async function step4_mcpConfig(targetIdes) {
   logStep(4, TOTAL_STEPS, "Configuring MCP server...");
 
-  if (hasMcpEntry()) {
-    logOk("agent-voice already configured in mcp.json");
-    return;
+  let ides = targetIdes;
+
+  // If no IDEs specified via flags, detect and prompt
+  if (!ides || ides.length === 0) {
+    const detected = detectInstalledIdes();
+
+    if (detected.length === 0) {
+      // Nothing detected — ask which to configure
+      console.log(`\n  Which IDE(s) are you using?`);
+      console.log(`    1) Claude Code`);
+      console.log(`    2) Cursor`);
+      console.log(`    3) Codex (OpenAI)`);
+      console.log(`    4) All of the above`);
+      console.log("");
+
+      const choice = await ask("  Select (1-4, or comma-separated like 1,2): ");
+      const nums = choice.split(",").map((s) => parseInt(s.trim()));
+      ides = [];
+      for (const n of nums) {
+        if (n === 1) ides.push("claude");
+        if (n === 2) ides.push("cursor");
+        if (n === 3) ides.push("codex");
+        if (n === 4) ides = ["claude", "cursor", "codex"];
+      }
+      if (ides.length === 0) ides = ["claude"]; // default
+    } else {
+      // Auto-configure detected IDEs
+      ides = detected;
+      logInfo(`Detected: ${detected.map((k) => IDE_CONFIGS[k].name).join(", ")}`);
+    }
   }
 
-  const config = readMcpConfig();
-  if (!config.mcpServers) {
-    config.mcpServers = {};
+  // Configure each IDE
+  for (const key of ides) {
+    const ide = IDE_CONFIGS[key];
+    if (!ide) {
+      logWarn(`Unknown IDE: ${key}`);
+      continue;
+    }
+
+    if (ide.hasEntry(ide.configPath)) {
+      logOk(`${ide.name}: already configured`);
+    } else {
+      ide.addEntry(ide.configPath);
+      logOk(`${ide.name}: added to ${ide.configPath}`);
+    }
   }
 
-  config.mcpServers["agent-voice"] = {
-    command: VENV_PYTHON,
-    args: [SERVER_PY],
-  };
+  // Clean up legacy ~/.claude/mcp.json if it exists
+  if (fileExists(MCP_CONFIG_LEGACY)) {
+    try {
+      const legacy = JSON.parse(fs.readFileSync(MCP_CONFIG_LEGACY, "utf8"));
+      if (legacy.mcpServers && legacy.mcpServers["agent-voice"]) {
+        delete legacy.mcpServers["agent-voice"];
+        if (Object.keys(legacy.mcpServers).length === 0) {
+          fs.unlinkSync(MCP_CONFIG_LEGACY);
+        } else {
+          fs.writeFileSync(MCP_CONFIG_LEGACY, JSON.stringify(legacy, null, 2) + "\n");
+        }
+        logInfo("Cleaned up legacy ~/.claude/mcp.json");
+      }
+    } catch { /* ignore */ }
+  }
 
-  writeMcpConfig(config);
-  logOk("Added agent-voice to ~/.claude.json");
+  return ides;
 }
 
 // ─── Step 5: Microphone ─────────────────────────────────────────────────────
@@ -422,16 +473,24 @@ async function step6_voiceRules() {
 async function run() {
   logHeader();
 
+  // Parse --claude, --cursor, --codex, --all flags from argv
+  const targetIdes = parseIdeFlags(process.argv.slice(3));
+
   const python = await step1_systemDeps();
   await step2_pythonEnv(python);
   await step3_models();
-  await step4_mcpConfig();
+  const configuredIdes = await step4_mcpConfig(targetIdes);
   await step5_microphone();
   await step6_voiceRules();
 
+  const ideNames = (configuredIdes || [])
+    .map((k) => IDE_CONFIGS[k]?.name || k)
+    .join(", ");
+
   console.log(
-    `\n🎉 ${require("./utils").BOLD}Done!${require("./utils").RESET} Start a new Claude Code session to hear your AI speak.`
+    `\n🎉 ${BOLD}Done!${RESET} Configured for: ${ideNames || "Claude Code"}`
   );
+  console.log('   Restart your IDE session, then voice tools will be available.');
   console.log('   Run "npx agent-voice-mcp test" to hear a sample voice.\n');
 }
 

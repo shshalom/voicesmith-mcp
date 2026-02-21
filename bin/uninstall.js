@@ -6,13 +6,12 @@
 
 const fs = require("fs");
 const path = require("path");
-const readline = require("readline");
 
 const {
   INSTALL_DIR,
-  MCP_CONFIG_USER,
   MCP_CONFIG_LEGACY,
   VOICE_RULES_DEST,
+  IDE_CONFIGS,
   logOk,
   logInfo,
   logWarn,
@@ -20,47 +19,38 @@ const {
   BOLD,
   RESET,
   RED,
-  readMcpConfig,
-  writeMcpConfig,
   fileExists,
   dirExists,
+  ask,
 } = require("./utils");
-
-function ask(question) {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase());
-    });
-  });
-}
 
 async function run() {
   logHeader();
   console.log(`${BOLD}Uninstalling Agent Voice MCP...${RESET}\n`);
 
-  // Show what will be removed
-  const items = [
-    { path: INSTALL_DIR, label: "Server, venv, models, and config" },
-    { path: MCP_CONFIG_USER, label: "MCP server registration in ~/.claude.json" },
-    { path: VOICE_RULES_DEST, label: "Voice rules template" },
-  ];
-
-  console.log("The following will be removed:");
-  for (const item of items) {
-    const exists = fileExists(item.path) || dirExists(item.path);
-    const status = exists ? "found" : "not found";
-    console.log(`  ${exists ? "•" : "○"} ${item.label} (${status})`);
+  // Detect which IDEs have the entry
+  const configuredIdes = [];
+  for (const [key, ide] of Object.entries(IDE_CONFIGS)) {
+    if (fileExists(ide.configPath) && ide.hasEntry(ide.configPath)) {
+      configuredIdes.push(key);
+    }
   }
+
+  // Show what will be removed
+  console.log("The following will be removed:");
+  console.log(`  ${dirExists(INSTALL_DIR) ? "•" : "○"} Server, venv, models, and config`);
+  for (const key of configuredIdes) {
+    console.log(`  • MCP entry in ${IDE_CONFIGS[key].name} (${IDE_CONFIGS[key].configPath})`);
+  }
+  if (configuredIdes.length === 0) {
+    console.log(`  ○ No IDE MCP entries found`);
+  }
+  console.log(`  ${fileExists(VOICE_RULES_DEST) ? "•" : "○"} Voice rules template`);
 
   console.log(`\n${RED}This cannot be undone.${RESET}`);
   const answer = await ask("\nProceed with uninstall? (yes/no): ");
 
-  if (answer !== "yes" && answer !== "y") {
+  if (answer.toLowerCase() !== "yes" && answer.toLowerCase() !== "y") {
     console.log("Uninstall cancelled.\n");
     return;
   }
@@ -75,28 +65,16 @@ async function run() {
     logInfo("Install directory already absent");
   }
 
-  // Remove agent-voice entry from ~/.claude.json (preserve other config)
-  if (fileExists(MCP_CONFIG_USER)) {
-    const config = readMcpConfig();
-    if (config.mcpServers && config.mcpServers["agent-voice"]) {
-      delete config.mcpServers["agent-voice"];
-      if (Object.keys(config.mcpServers).length === 0) {
-        delete config.mcpServers;
+  // Remove agent-voice entry from each IDE config
+  for (const [key, ide] of Object.entries(IDE_CONFIGS)) {
+    if (fileExists(ide.configPath)) {
+      if (ide.removeEntry(ide.configPath)) {
+        logOk(`Removed agent-voice from ${ide.name}`);
       }
-      // Only remove file if completely empty
-      if (Object.keys(config).length === 0) {
-        fs.unlinkSync(MCP_CONFIG_USER);
-        logOk("Removed ~/.claude.json (was empty)");
-      } else {
-        writeMcpConfig(config);
-        logOk("Removed agent-voice from ~/.claude.json");
-      }
-    } else {
-      logInfo("agent-voice not in ~/.claude.json");
     }
   }
 
-  // Also clean up legacy ~/.claude/mcp.json if it exists
+  // Clean up legacy ~/.claude/mcp.json if it exists
   if (fileExists(MCP_CONFIG_LEGACY)) {
     try {
       const legacy = JSON.parse(fs.readFileSync(MCP_CONFIG_LEGACY, "utf8"));

@@ -21,10 +21,6 @@ const VENV_PIP = path.join(VENV_DIR, "bin", "pip");
 const CONFIG_FILE = path.join(INSTALL_DIR, "config.json");
 const SERVER_PY = path.join(INSTALL_DIR, "server.py");
 
-// Claude Code reads MCP config from ~/.claude.json (user scope) or .mcp.json (project scope)
-const MCP_CONFIG_USER = path.join(os.homedir(), ".claude.json");
-// Legacy path (incorrect but kept for cleanup)
-const MCP_CONFIG_LEGACY = path.join(os.homedir(), ".claude", "mcp.json");
 const CLAUDE_AGENTS_DIR = path.join(os.homedir(), ".claude", "agents");
 const VOICE_RULES_DEST = path.join(CLAUDE_AGENTS_DIR, "voice-rules.md");
 
@@ -41,6 +37,152 @@ const KOKORO_MODEL_URL =
   "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx";
 const KOKORO_VOICES_URL =
   "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin";
+
+// ─── IDE Registry ────────────────────────────────────────────────────────────
+
+const IDE_CONFIGS = {
+  claude: {
+    name: "Claude Code",
+    configPath: path.join(os.homedir(), ".claude.json"),
+    detect: () => dirExists(path.join(os.homedir(), ".claude")),
+    // Claude Code uses top-level mcpServers in ~/.claude.json
+    read(configPath) {
+      try {
+        return JSON.parse(fs.readFileSync(configPath, "utf8"));
+      } catch { return {}; }
+    },
+    write(configPath, data) {
+      fs.writeFileSync(configPath, JSON.stringify(data, null, 2) + "\n");
+    },
+    hasEntry(configPath) {
+      const data = this.read(configPath);
+      return !!(data.mcpServers && data.mcpServers["agent-voice"]);
+    },
+    addEntry(configPath) {
+      const data = this.read(configPath);
+      if (!data.mcpServers) data.mcpServers = {};
+      data.mcpServers["agent-voice"] = { command: VENV_PYTHON, args: [SERVER_PY] };
+      this.write(configPath, data);
+    },
+    removeEntry(configPath) {
+      const data = this.read(configPath);
+      if (data.mcpServers && data.mcpServers["agent-voice"]) {
+        delete data.mcpServers["agent-voice"];
+        if (Object.keys(data.mcpServers).length === 0) delete data.mcpServers;
+        if (Object.keys(data).length === 0) {
+          try { fs.unlinkSync(configPath); } catch {}
+        } else {
+          this.write(configPath, data);
+        }
+        return true;
+      }
+      return false;
+    },
+  },
+
+  cursor: {
+    name: "Cursor",
+    configPath: path.join(os.homedir(), ".cursor", "mcp.json"),
+    detect: () => dirExists(path.join(os.homedir(), ".cursor")),
+    read(configPath) {
+      try {
+        return JSON.parse(fs.readFileSync(configPath, "utf8"));
+      } catch { return {}; }
+    },
+    write(configPath, data) {
+      ensureDir(path.dirname(configPath));
+      fs.writeFileSync(configPath, JSON.stringify(data, null, 2) + "\n");
+    },
+    hasEntry(configPath) {
+      const data = this.read(configPath);
+      return !!(data.mcpServers && data.mcpServers["agent-voice"]);
+    },
+    addEntry(configPath) {
+      const data = this.read(configPath);
+      if (!data.mcpServers) data.mcpServers = {};
+      data.mcpServers["agent-voice"] = { command: VENV_PYTHON, args: [SERVER_PY] };
+      this.write(configPath, data);
+    },
+    removeEntry(configPath) {
+      const data = this.read(configPath);
+      if (data.mcpServers && data.mcpServers["agent-voice"]) {
+        delete data.mcpServers["agent-voice"];
+        if (Object.keys(data.mcpServers).length === 0) {
+          try { fs.unlinkSync(configPath); } catch {}
+        } else {
+          this.write(configPath, data);
+        }
+        return true;
+      }
+      return false;
+    },
+  },
+
+  codex: {
+    name: "Codex (OpenAI)",
+    // Codex CLI reads from ~/.codex/mcp.json
+    configPath: path.join(os.homedir(), ".codex", "mcp.json"),
+    detect: () => dirExists(path.join(os.homedir(), ".codex")),
+    read(configPath) {
+      try {
+        return JSON.parse(fs.readFileSync(configPath, "utf8"));
+      } catch { return {}; }
+    },
+    write(configPath, data) {
+      ensureDir(path.dirname(configPath));
+      fs.writeFileSync(configPath, JSON.stringify(data, null, 2) + "\n");
+    },
+    hasEntry(configPath) {
+      const data = this.read(configPath);
+      return !!(data.mcpServers && data.mcpServers["agent-voice"]);
+    },
+    addEntry(configPath) {
+      const data = this.read(configPath);
+      if (!data.mcpServers) data.mcpServers = {};
+      data.mcpServers["agent-voice"] = { command: VENV_PYTHON, args: [SERVER_PY] };
+      this.write(configPath, data);
+    },
+    removeEntry(configPath) {
+      const data = this.read(configPath);
+      if (data.mcpServers && data.mcpServers["agent-voice"]) {
+        delete data.mcpServers["agent-voice"];
+        if (Object.keys(data.mcpServers).length === 0) {
+          try { fs.unlinkSync(configPath); } catch {}
+        } else {
+          this.write(configPath, data);
+        }
+        return true;
+      }
+      return false;
+    },
+  },
+};
+
+// Legacy path for cleanup
+const MCP_CONFIG_LEGACY = path.join(os.homedir(), ".claude", "mcp.json");
+
+// ─── IDE Flag Parsing ────────────────────────────────────────────────────────
+
+function parseIdeFlags(argv) {
+  const flags = [];
+  for (const arg of argv) {
+    if (arg === "--claude") flags.push("claude");
+    else if (arg === "--cursor") flags.push("cursor");
+    else if (arg === "--codex") flags.push("codex");
+    else if (arg === "--all") flags.push("claude", "cursor", "codex");
+  }
+  return [...new Set(flags)];
+}
+
+function detectInstalledIdes() {
+  const detected = [];
+  for (const [key, ide] of Object.entries(IDE_CONFIGS)) {
+    if (ide.detect()) {
+      detected.push(key);
+    }
+  }
+  return detected;
+}
 
 // ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -168,23 +310,19 @@ function findModel(filename) {
   return null;
 }
 
-// ─── MCP Config ──────────────────────────────────────────────────────────────
+// ─── Readline Helper ─────────────────────────────────────────────────────────
 
-function readMcpConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(MCP_CONFIG_USER, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-function writeMcpConfig(config) {
-  fs.writeFileSync(MCP_CONFIG_USER, JSON.stringify(config, null, 2) + "\n");
-}
-
-function hasMcpEntry() {
-  const config = readMcpConfig();
-  return !!(config.mcpServers && config.mcpServers["agent-voice"]);
+function ask(question) {
+  const rl = require("readline").createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
 }
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
@@ -198,14 +336,18 @@ module.exports = {
   VENV_PIP,
   CONFIG_FILE,
   SERVER_PY,
-  MCP_CONFIG_USER,
-  MCP_CONFIG_LEGACY,
   CLAUDE_AGENTS_DIR,
   VOICE_RULES_DEST,
   PKG_DIR,
   ALT_MODEL_DIRS,
   KOKORO_MODEL_URL,
   KOKORO_VOICES_URL,
+  MCP_CONFIG_LEGACY,
+
+  // IDE
+  IDE_CONFIGS,
+  parseIdeFlags,
+  detectInstalledIdes,
 
   // Logging
   logOk,
@@ -232,8 +374,6 @@ module.exports = {
   dirExists,
   ensureDir,
   findModel,
-  readMcpConfig,
-  writeMcpConfig,
-  hasMcpEntry,
+  ask,
   execAsync,
 };
