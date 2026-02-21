@@ -1,0 +1,19 @@
+{
+  "tts": {
+    "model_path": "~/.local/share/agent-voice-mcp/models/kokoro-v1.0.onnx",
+    "voices_path": "~/.local/share/agent-voice-mcp/models/voices-v1.0.bin",
+    "default_voice": "am_eric",
+    "default_speed": 1.0,
+    "audio_player": "mpv"
+  },
+  "stt": {
+    "model_size": "base",
+    "language": "en",
+    "silence_threshold": 1.5,
+    "max_listen_timeout": 15
+  },
+  "main_agent": "Eric",
+  "voice_registry": {},
+  "log_level": "info",
+  "log_file": false
+}
