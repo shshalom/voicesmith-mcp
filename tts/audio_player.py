@@ -1,5 +1,6 @@
 """Audio playback via external player (mpv, afplay, aplay)."""
 
+import fcntl
 import os
 import platform
 import subprocess
@@ -8,7 +9,7 @@ import time
 
 import soundfile as sf
 
-from shared import PlaybackResult, AudioPlayerError, get_logger
+from shared import PlaybackResult, AudioPlayerError, AUDIO_LOCK_PATH, get_logger
 
 logger = get_logger("tts.audio_player")
 
@@ -79,14 +80,21 @@ class AudioPlayer:
             cmd = self._build_command(tmp_path)
             logger.debug(f"Playing audio: {' '.join(cmd)}")
 
-            start = time.perf_counter()
-            self._process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            self._process.wait()
-            duration_ms = (time.perf_counter() - start) * 1000
+            # Cross-session audio lock: prevents overlapping playback
+            # flock is kernel-managed — auto-released on crash, no stale locks
+            with open(AUDIO_LOCK_PATH, "w") as lock_file:
+                fcntl.flock(lock_file, fcntl.LOCK_EX)
+
+                start = time.perf_counter()
+                self._process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self._process.wait()
+                duration_ms = (time.perf_counter() - start) * 1000
+
+            # Lock released when lock_file closes
 
             if self._process.returncode != 0:
                 return PlaybackResult(

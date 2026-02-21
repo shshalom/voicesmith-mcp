@@ -44,6 +44,7 @@ class AppConfig:
     voice_registry: dict[str, str] = field(default_factory=dict)
     log_level: str = "info"
     log_file: bool = False
+    http_port: int = 7865
 
 
 def get_config_path() -> Path:
@@ -107,6 +108,8 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
                 config.log_level = data["log_level"]
             if "log_file" in data:
                 config.log_file = bool(data["log_file"])
+            if "http_port" in data:
+                config.http_port = int(data["http_port"])
 
             logger.debug(f"Loaded config from {path}")
         except (json.JSONDecodeError, KeyError) as e:
@@ -123,6 +126,8 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         config.tts.audio_player = env_player
     if env_default := os.environ.get("VOICE_DEFAULT"):
         config.tts.default_voice = env_default
+    if env_port := os.environ.get("VOICE_HTTP_PORT"):
+        config.http_port = int(env_port)
 
     return config
 
@@ -150,6 +155,7 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
         "voice_registry": config.voice_registry,
         "log_level": config.log_level,
         "log_file": config.log_file,
+        "http_port": config.http_port,
     }
 
     with open(path, "w") as f:

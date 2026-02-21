@@ -51,7 +51,7 @@ class TestWhisperEngine:
 
         seg1 = MagicMock()
         seg1.text = "Hello world"
-        seg1.avg_log_prob = -0.3
+        seg1.avg_logprob = -0.3
 
         mock_info = MagicMock()
         mock_info.language = "en"
@@ -66,16 +66,16 @@ class TestWhisperEngine:
         assert result.transcription_ms > 0
 
     def test_transcribe_confidence_computation(self):
-        """Confidence should be exp(avg_log_prob) averaged across segments."""
+        """Confidence should be exp(avg_logprob) averaged across segments."""
         engine, mock_model = self._make_engine()
 
         seg1 = MagicMock()
         seg1.text = "Hello "
-        seg1.avg_log_prob = -0.2
+        seg1.avg_logprob = -0.2
 
         seg2 = MagicMock()
         seg2.text = "world"
-        seg2.avg_log_prob = -0.4
+        seg2.avg_logprob = -0.4
 
         mock_info = MagicMock()
         mock_info.language = "en"
@@ -115,11 +115,11 @@ class TestWhisperEngine:
 
         seg1 = MagicMock()
         seg1.text = " Hello "
-        seg1.avg_log_prob = -0.1
+        seg1.avg_logprob = -0.1
 
         seg2 = MagicMock()
         seg2.text = "world "
-        seg2.avg_log_prob = -0.1
+        seg2.avg_logprob = -0.1
 
         mock_info = MagicMock()
         mock_info.language = "en"
@@ -136,7 +136,7 @@ class TestWhisperEngine:
 
         seg1 = MagicMock()
         seg1.text = "Hello"
-        seg1.avg_log_prob = 0.5  # exp(0.5) > 1.0
+        seg1.avg_logprob = 0.5  # exp(0.5) > 1.0
 
         mock_info = MagicMock()
         mock_info.language = "en"

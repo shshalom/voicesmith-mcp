@@ -10,9 +10,12 @@ Usage:
 """
 
 import asyncio
+import json
 import signal
 import sys
+import threading
 import time
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -25,6 +28,7 @@ from shared import (
     SILENCE_THRESHOLD,
     LISTEN_TIMEOUT,
     REGISTRY_SAVE_INTERVAL,
+    DEFAULT_HTTP_PORT,
     SpeakResult,
     ListenResult,
     TTSEngineError,
@@ -33,6 +37,7 @@ from shared import (
     get_logger,
 )
 from config import load_config, save_config, get_config_path, AppConfig
+from session_registry import register_session, unregister_session
 
 logger = get_logger("server")
 
@@ -55,6 +60,8 @@ _muted = False
 _listen_cancel_event: asyncio.Event = None
 _listen_active = False
 _startup_time = time.time()
+_session_info: dict = None
+_event_loop: asyncio.AbstractEventLoop = None
 
 
 # ─── Startup / Shutdown ──────────────────────────────────────────────────────
@@ -117,9 +124,75 @@ def _init_registry(config: AppConfig):
     logger.info(f"Voice registry initialized ({_registry.size} entries)")
 
 
+# ─── HTTP Listener (Push-to-Talk) ─────────────────────────────────────────────
+
+class _VoiceHTTPHandler(BaseHTTPRequestHandler):
+    """HTTP handler for push-to-talk. Runs in a daemon thread."""
+
+    def do_GET(self):
+        if self.path == "/status":
+            body = json.dumps({
+                "ready": True,
+                "name": _session_info.get("name") if _session_info else None,
+                "port": _session_info.get("port") if _session_info else None,
+            })
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body.encode())
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        if self.path == "/listen":
+            self._handle_listen()
+        else:
+            self.send_error(404)
+
+    def _handle_listen(self):
+        """Record mic → transcribe → return JSON. Bridges to async via the main event loop."""
+        if _event_loop is None:
+            self._json_response(500, {"error": "server_not_ready"})
+            return
+
+        # Schedule the listen coroutine on the main event loop
+        future = asyncio.run_coroutine_threadsafe(
+            listen(timeout=15, prompt="push-to-talk", silence_threshold=1.5),
+            _event_loop,
+        )
+        try:
+            result = future.result(timeout=30)  # Wait up to 30s
+            self._json_response(200, result)
+        except Exception as e:
+            self._json_response(500, {"error": "listen_failed", "message": str(e)})
+
+    def _json_response(self, code, data):
+        body = json.dumps(data)
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body.encode())
+
+    def log_message(self, format, *args):
+        """Redirect HTTP logs to our logger instead of stderr."""
+        logger.debug(f"HTTP: {format % args}")
+
+
+def _start_http_listener(port: int):
+    """Start the HTTP listener in a daemon thread."""
+    try:
+        server = HTTPServer(("127.0.0.1", port), _VoiceHTTPHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        logger.info(f"HTTP listener started on 127.0.0.1:{port}")
+    except OSError as e:
+        logger.warning(f"Failed to start HTTP listener on port {port}: {e}")
+
+
+# ─── Shutdown ─────────────────────────────────────────────────────────────────
 
 def _shutdown():
-    """Graceful shutdown: stop playback, save registry."""
+    """Graceful shutdown: stop playback, save registry, unregister session."""
     logger.info("Shutting down...")
 
     if _speech_queue is not None:
@@ -135,6 +208,11 @@ def _shutdown():
             logger.info("Registry saved on shutdown")
         except Exception as e:
             logger.error(f"Failed to save registry on shutdown: {e}")
+
+    try:
+        unregister_session()
+    except Exception as e:
+        logger.error(f"Failed to unregister session: {e}")
 
 
 # ─── MCP Tools ────────────────────────────────────────────────────────────────
@@ -393,6 +471,7 @@ async def status() -> dict:
         "uptime_s": uptime_s,
         "registry_size": _registry.size if _registry else 0,
         "queue_depth": _speech_queue.depth if _speech_queue else 0,
+        "session": _session_info,
     }
     return result
 
@@ -459,7 +538,7 @@ def _run_smoke_test():
 
 def main():
     """Entry point."""
-    global _config, _listen_cancel_event
+    global _config, _listen_cancel_event, _session_info, _event_loop
 
     if "--test" in sys.argv:
         _run_smoke_test()
@@ -497,6 +576,16 @@ def main():
 
     logger.info(f"Server ready (TTS: {'OK' if tts_ok else 'FAILED'}, STT: {'OK' if stt_ok else 'FAILED'})")
 
+    # Register session for multi-session coordination
+    _session_info = register_session(
+        preferred_name=_config.main_agent,
+        preferred_voice=_config.tts.default_voice,
+        base_port=_config.http_port,
+    )
+
+    # Start HTTP listener for push-to-talk
+    _start_http_listener(_session_info["port"])
+
     # Register shutdown handlers
     def handle_signal(signum, frame):
         _shutdown()
@@ -508,12 +597,34 @@ def main():
     import atexit
     atexit.register(_shutdown)
 
-    # Run MCP server (stdio transport)
-    # Periodic registry save is handled via atexit and signal handlers
-    # since the FastMCP run() call blocks. The registry is saved on
-    # graceful shutdown and every REGISTRY_SAVE_INTERVAL seconds.
+    # Store event loop reference for HTTP→async bridge
+    # FastMCP creates the loop internally; we capture it via a startup task
     _start_periodic_save_thread()
+    _start_event_loop_capture()
     mcp.run(transport="stdio")
+
+
+def _start_event_loop_capture():
+    """Capture the asyncio event loop reference once it's running.
+
+    Uses a thread that waits briefly then grabs the running loop.
+    This is needed for run_coroutine_threadsafe() in the HTTP handler.
+    """
+    global _event_loop
+
+    def _capture():
+        # Wait for the event loop to be created by FastMCP
+        time.sleep(1)
+        try:
+            _loop = asyncio.get_event_loop()
+            if _loop.is_running():
+                globals()["_event_loop"] = _loop
+                logger.debug("Captured asyncio event loop for HTTP bridge")
+        except RuntimeError:
+            logger.warning("Could not capture event loop for HTTP bridge")
+
+    thread = threading.Thread(target=_capture, daemon=True)
+    thread.start()
 
 
 def _start_periodic_save_thread():

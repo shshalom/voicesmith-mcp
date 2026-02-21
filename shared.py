@@ -24,6 +24,10 @@ MAX_CHUNK_LENGTH = 500       # Auto-chunk text longer than this (characters)
 SILENCE_THRESHOLD = 1.5      # Seconds of silence before stopping recording
 LISTEN_TIMEOUT = 15          # Default max seconds to wait for speech
 REGISTRY_SAVE_INTERVAL = 60  # Seconds between periodic registry saves
+DEFAULT_HTTP_PORT = 7865     # HTTP listener port for push-to-talk
+SESSIONS_FILE_NAME = "sessions.json"
+AUDIO_LOCK_PATH = "/tmp/agent-voice-audio.lock"
+READY_SOUND = "/System/Library/Sounds/Tink.aiff"
 
 
 # ─── Voice Catalog ────────────────────────────────────────────────────────────

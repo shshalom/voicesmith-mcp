@@ -15,5 +15,6 @@
   "main_agent": "Eric",
   "voice_registry": {},
   "log_level": "info",
-  "log_file": false
+  "log_file": false,
+  "http_port": 7865
 }
