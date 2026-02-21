@@ -143,15 +143,13 @@ info "whisper-base model (~150MB) will download automatically on first use"
 # ─── Step 4: MCP config ─────────────────────────────────────────────────
 echo -e "\n${BOLD}Step 4/6: Configuring MCP server...${RESET}"
 
-MCP_CONFIG="$HOME/.claude/mcp.json"
-mkdir -p "$(dirname "$MCP_CONFIG")"
+MCP_CONFIG="$HOME/.claude.json"
 
 if [ -f "$MCP_CONFIG" ] && grep -q "agent-voice" "$MCP_CONFIG" 2>/dev/null; then
-    ok "agent-voice already configured in mcp.json"
+    ok "agent-voice already configured in ~/.claude.json"
 else
-    # Create or merge mcp.json
+    # Create or merge ~/.claude.json
     if [ -f "$MCP_CONFIG" ]; then
-        # Use Python to merge JSON safely
         "$VENV_DIR/bin/python3" -c "
 import json
 with open('$MCP_CONFIG') as f:
@@ -176,7 +174,7 @@ with open('$MCP_CONFIG', 'w') as f:
 }
 MCPEOF
     fi
-    ok "Added agent-voice to ~/.claude/mcp.json"
+    ok "Added agent-voice to ~/.claude.json"
 fi
 
 # ─── Step 5: Microphone ─────────────────────────────────────────────────

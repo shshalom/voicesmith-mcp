@@ -21,7 +21,10 @@ const VENV_PIP = path.join(VENV_DIR, "bin", "pip");
 const CONFIG_FILE = path.join(INSTALL_DIR, "config.json");
 const SERVER_PY = path.join(INSTALL_DIR, "server.py");
 
-const MCP_CONFIG = path.join(os.homedir(), ".claude", "mcp.json");
+// Claude Code reads MCP config from ~/.claude.json (user scope) or .mcp.json (project scope)
+const MCP_CONFIG_USER = path.join(os.homedir(), ".claude.json");
+// Legacy path (incorrect but kept for cleanup)
+const MCP_CONFIG_LEGACY = path.join(os.homedir(), ".claude", "mcp.json");
 const CLAUDE_AGENTS_DIR = path.join(os.homedir(), ".claude", "agents");
 const VOICE_RULES_DEST = path.join(CLAUDE_AGENTS_DIR, "voice-rules.md");
 
@@ -169,15 +172,14 @@ function findModel(filename) {
 
 function readMcpConfig() {
   try {
-    return JSON.parse(fs.readFileSync(MCP_CONFIG, "utf8"));
+    return JSON.parse(fs.readFileSync(MCP_CONFIG_USER, "utf8"));
   } catch {
     return {};
   }
 }
 
 function writeMcpConfig(config) {
-  ensureDir(path.dirname(MCP_CONFIG));
-  fs.writeFileSync(MCP_CONFIG, JSON.stringify(config, null, 2) + "\n");
+  fs.writeFileSync(MCP_CONFIG_USER, JSON.stringify(config, null, 2) + "\n");
 }
 
 function hasMcpEntry() {
@@ -196,7 +198,8 @@ module.exports = {
   VENV_PIP,
   CONFIG_FILE,
   SERVER_PY,
-  MCP_CONFIG,
+  MCP_CONFIG_USER,
+  MCP_CONFIG_LEGACY,
   CLAUDE_AGENTS_DIR,
   VOICE_RULES_DEST,
   PKG_DIR,

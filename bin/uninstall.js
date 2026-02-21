@@ -10,7 +10,8 @@ const readline = require("readline");
 
 const {
   INSTALL_DIR,
-  MCP_CONFIG,
+  MCP_CONFIG_USER,
+  MCP_CONFIG_LEGACY,
   VOICE_RULES_DEST,
   logOk,
   logInfo,
@@ -45,7 +46,7 @@ async function run() {
   // Show what will be removed
   const items = [
     { path: INSTALL_DIR, label: "Server, venv, models, and config" },
-    { path: MCP_CONFIG, label: "MCP server registration (agent-voice entry)" },
+    { path: MCP_CONFIG_USER, label: "MCP server registration in ~/.claude.json" },
     { path: VOICE_RULES_DEST, label: "Voice rules template" },
   ];
 
@@ -74,22 +75,42 @@ async function run() {
     logInfo("Install directory already absent");
   }
 
-  // Remove agent-voice entry from mcp.json (preserve other servers)
-  if (fileExists(MCP_CONFIG)) {
+  // Remove agent-voice entry from ~/.claude.json (preserve other config)
+  if (fileExists(MCP_CONFIG_USER)) {
     const config = readMcpConfig();
     if (config.mcpServers && config.mcpServers["agent-voice"]) {
       delete config.mcpServers["agent-voice"];
-      // If no servers left, remove the file
-      if (Object.keys(config.mcpServers).length === 0 && Object.keys(config).length === 1) {
-        fs.unlinkSync(MCP_CONFIG);
-        logOk("Removed ~/.claude/mcp.json (was empty)");
+      if (Object.keys(config.mcpServers).length === 0) {
+        delete config.mcpServers;
+      }
+      // Only remove file if completely empty
+      if (Object.keys(config).length === 0) {
+        fs.unlinkSync(MCP_CONFIG_USER);
+        logOk("Removed ~/.claude.json (was empty)");
       } else {
         writeMcpConfig(config);
-        logOk("Removed agent-voice from ~/.claude/mcp.json");
+        logOk("Removed agent-voice from ~/.claude.json");
       }
     } else {
-      logInfo("agent-voice not in mcp.json");
+      logInfo("agent-voice not in ~/.claude.json");
     }
+  }
+
+  // Also clean up legacy ~/.claude/mcp.json if it exists
+  if (fileExists(MCP_CONFIG_LEGACY)) {
+    try {
+      const legacy = JSON.parse(fs.readFileSync(MCP_CONFIG_LEGACY, "utf8"));
+      if (legacy.mcpServers && legacy.mcpServers["agent-voice"]) {
+        delete legacy.mcpServers["agent-voice"];
+        if (Object.keys(legacy.mcpServers).length === 0) {
+          fs.unlinkSync(MCP_CONFIG_LEGACY);
+          logOk("Cleaned up legacy ~/.claude/mcp.json");
+        } else {
+          fs.writeFileSync(MCP_CONFIG_LEGACY, JSON.stringify(legacy, null, 2) + "\n");
+          logOk("Removed agent-voice from legacy ~/.claude/mcp.json");
+        }
+      }
+    } catch { /* ignore */ }
   }
 
   // Remove voice rules

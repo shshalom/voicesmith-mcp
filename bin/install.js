@@ -20,7 +20,8 @@ const {
   VENV_PIP,
   CONFIG_FILE,
   SERVER_PY,
-  MCP_CONFIG,
+  MCP_CONFIG_USER,
+  MCP_CONFIG_LEGACY,
   CLAUDE_AGENTS_DIR,
   VOICE_RULES_DEST,
   PKG_DIR,
@@ -338,7 +339,7 @@ async function step4_mcpConfig() {
   };
 
   writeMcpConfig(config);
-  logOk("Added agent-voice to ~/.claude/mcp.json");
+  logOk("Added agent-voice to ~/.claude.json");
 }
 
 // ─── Step 5: Microphone ─────────────────────────────────────────────────────
