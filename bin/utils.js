@@ -380,12 +380,14 @@ You have access to voice tools via the Agent Voice MCP server.
 - Speak twice per response:
   1. **Opening** — Brief acknowledgment. Use \`block: false\`.
   2. **Closing** — Summary when done. Use \`block: true\`. Never skip.
-- **Questions are MANDATORY voice.** Whenever you ask the user a question, you MUST speak it aloud — use \`speak_then_listen\` for short-answer questions, or \`speak\` with \`block: true\` for open-ended ones.
+- **Questions that need user input → use \`speak_then_listen\` as your closing voice.** If your response asks the user to make a decision, provide information, or confirm something (e.g., "which approach?", "should I?", "want me to?", "does this look right?"), your closing voice MUST be \`speak_then_listen\` — not regular \`speak\`. This way the mic opens right after you ask.
+- Rhetorical wrap-ups ("What's next?", "Standing by.") do NOT require listen — use regular \`speak\` for those.
 - 1-2 sentences max. Write details, speak summaries. No code or paths aloud.
 - Speak at transitions: start, finish, error, question.
 
 ## Listening
-- Use \`speak_then_listen\` for short-answer questions. Fall back to text on timeout.
+- Use \`speak_then_listen\` whenever you need user input — it is your closing voice AND listen in one call.
+- Fall back to text on timeout. Do not retry listen.
 
 ## Sub-Agents
 - Call \`get_voice_registry\` to find available voice names before assigning.
@@ -413,12 +415,14 @@ You have access to voice tools via the Agent Voice MCP server.
 - Speak twice per response:
   1. **Opening** — Brief acknowledgment. Use \`block: false\`.
   2. **Closing** — Summary when done. Use \`block: true\`. Never skip.
-- **Questions are MANDATORY voice.** Whenever you ask the user a question, you MUST speak it aloud — use \`speak_then_listen\` for short-answer questions, or \`speak\` with \`block: true\` for open-ended ones.
+- **Questions that need user input → use \`speak_then_listen\` as your closing voice.** If your response asks the user to make a decision, provide information, or confirm something (e.g., "which approach?", "should I?", "want me to?", "does this look right?"), your closing voice MUST be \`speak_then_listen\` — not regular \`speak\`. This way the mic opens right after you ask.
+- Rhetorical wrap-ups ("What's next?", "Standing by.") do NOT require listen — use regular \`speak\` for those.
 - 1-2 sentences max. Write details, speak summaries. No code or paths aloud.
 - Speak at transitions: start, finish, error, question.
 
 ## Listening
-- Use \`speak_then_listen\` for short-answer questions. Fall back to text on timeout.
+- Use \`speak_then_listen\` whenever you need user input — it is your closing voice AND listen in one call.
+- Fall back to text on timeout. Do not retry listen.
 
 ## Sub-Agents
 - Call \`get_voice_registry\` to find available voice names before assigning.
