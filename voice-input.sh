@@ -76,7 +76,7 @@ fi
 # ─── Play Ready Sound ────────────────────────────────────────────────────────
 
 if [ -f "$READY_SOUND" ]; then
-    afplay "$READY_SOUND" &
+    afplay "$READY_SOUND"
 fi
 
 # ─── Record and Transcribe ───────────────────────────────────────────────────
