@@ -9,7 +9,8 @@ You have access to voice tools via the Agent Voice MCP server.
 ## Speaking
 - Speak twice per response:
   1. **Opening** — Brief acknowledgment when starting work. Use `block: false` so work begins immediately in parallel.
-  2. **Closing** — Summary when done, or speak the question if asking one. Use `block: true`. Never skip this.
+  2. **Closing** — Summary when done. Use `block: true`. Never skip this.
+- **Questions are MANDATORY voice.** Whenever you ask the user a question, you MUST speak it aloud — use `speak_then_listen` for short-answer questions, or `speak` with `block: true` for open-ended ones. Never ask a question in text only.
 - Keep spoken messages to 1-2 sentences. Write details, speak summaries.
 - Do not speak code, file paths, or long lists aloud.
 - Speak at transitions only: start, finish, error, question. Do not narrate every action.

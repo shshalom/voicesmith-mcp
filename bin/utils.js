@@ -380,6 +380,7 @@ You have access to voice tools via the Agent Voice MCP server.
 - Speak twice per response:
   1. **Opening** — Brief acknowledgment. Use \`block: false\`.
   2. **Closing** — Summary when done. Use \`block: true\`. Never skip.
+- **Questions are MANDATORY voice.** Whenever you ask the user a question, you MUST speak it aloud — use \`speak_then_listen\` for short-answer questions, or \`speak\` with \`block: true\` for open-ended ones.
 - 1-2 sentences max. Write details, speak summaries. No code or paths aloud.
 - Speak at transitions: start, finish, error, question.
 
@@ -412,6 +413,7 @@ You have access to voice tools via the Agent Voice MCP server.
 - Speak twice per response:
   1. **Opening** — Brief acknowledgment. Use \`block: false\`.
   2. **Closing** — Summary when done. Use \`block: true\`. Never skip.
+- **Questions are MANDATORY voice.** Whenever you ask the user a question, you MUST speak it aloud — use \`speak_then_listen\` for short-answer questions, or \`speak\` with \`block: true\` for open-ended ones.
 - 1-2 sentences max. Write details, speak summaries. No code or paths aloud.
 - Speak at transitions: start, finish, error, question.
 
