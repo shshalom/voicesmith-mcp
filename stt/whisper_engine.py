@@ -49,7 +49,7 @@ class WhisperEngine:
             log_probs = []
             for segment in segments:
                 texts.append(segment.text)
-                log_probs.append(segment.avg_log_prob)
+                log_probs.append(segment.avg_logprob)
 
             transcription_ms = (time.perf_counter() - start) * 1000
             text = "".join(texts).strip()
