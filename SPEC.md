@@ -37,7 +37,7 @@ AI Assistant (Claude Code, Cursor, etc.)
 │  │   TTS Engine        │   │   STT Engine            │ │
 │  │                     │   │                         │ │
 │  │  Kokoro ONNX (82M)  │   │  faster-whisper (150M)  │ │
-│  │  53 voices           │   │  Silero VAD (2MB)       │ │
+│  │  54 voices           │   │  Silero VAD (2MB)       │ │
 │  │  loaded at startup   │   │  loaded at startup      │ │
 │  └────────────────────┘   └────────────────────────┘ │
 │                                                       │
@@ -78,7 +78,7 @@ Server logs to **stderr** (MCP convention — stdout is reserved for the protoco
    - If no name match, pick a deterministic but unique voice from the unassigned pool (using a hash of the agent name)
    - The assigned voice persists for the server's lifetime and is **auto-saved to config.json** on graceful shutdown and periodically (every 60s), so assignments survive restarts
    - Users can optionally pre-configure mappings in `config.json` for guaranteed persistence
-   - **Pool exhaustion:** When all 53 voices are assigned, new agents get a hash-based voice from the full pool (may share with an existing agent). A warning is logged: "All voices assigned, reusing voices."
+   - **Pool exhaustion:** When all 54 voices are assigned, new agents get a hash-based voice from the full pool (may share with an existing agent). A warning is logged: "All voices assigned, reusing voices."
 
 4. **Configurable main agent voice** — The main agent's voice is not hardcoded. Users set it via:
    - `config.json` (`"main_agent"` field)
@@ -87,7 +87,7 @@ Server logs to **stderr** (MCP convention — stdout is reserved for the protoco
 
 5. **Voice state: tool presence = voice on** — When the MCP server is running, voice tools are available and the AI uses them. When the server is not running, the tools don't exist and the AI falls back to text. No on/off flag to manage. Additionally, `mute`/`unmute` tools allow temporarily silencing audio without stopping the server.
 
-6. **Voice Activity Detection (VAD)** — The `listen` tool uses Silero VAD (2MB neural network) to detect when the user stops speaking. After 1.5 seconds of silence, recording stops and transcription begins. No manual "stop" action needed.
+6. **Voice Activity Detection (VAD)** — The `listen` tool uses Silero VAD (2MB ONNX model, runs on ONNX Runtime — no PyTorch dependency) to detect when the user stops speaking. After 1.5 seconds of silence, recording stops and transcription begins. No manual "stop" action needed. The VAD requires a 64-sample context window prepended to each 512-sample chunk for accurate detection.
 
 7. **Temp file auto-cleanup** — Audio files are generated to a temp path, played, and immediately deleted. No accumulation.
 
@@ -150,7 +150,7 @@ List all available Kokoro voices.
     { "id": "af_nova", "gender": "female", "accent": "american" },
     ...
   ],
-  "total": 53
+  "total": 54
 }
 ```
 
@@ -272,7 +272,7 @@ Report server health and component status. Always available, even if TTS or STT 
 **Returns:**
 ```json
 {
-  "tts": { "loaded": true, "model": "kokoro-v1.0.onnx", "voices": 53 },
+  "tts": { "loaded": true, "model": "kokoro-v1.0.onnx", "voices": 54 },
   "stt": { "loaded": true, "model": "whisper-base", "language": "en" },
   "vad": { "loaded": true },
   "muted": false,
@@ -375,17 +375,19 @@ When the server IS running but you want to temporarily silence it:
 
 ### Confidence Score Computation
 
-The `confidence` field in `listen` responses is computed as `exp(avg_log_prob)` where `avg_log_prob` is the average log probability across all segments returned by faster-whisper. For single-segment transcriptions (typical for short commands), this is the direct segment probability. Range: 0.0 to 1.0.
+The `confidence` field in `listen` responses is computed as `exp(avg_logprob)` where `avg_logprob` is the average log probability across all segments returned by faster-whisper (note: the attribute is `avg_logprob`, not `avg_log_prob`). For single-segment transcriptions (typical for short commands), this is the direct segment probability. Range: 0.0 to 1.0.
 
-### Voice Activity Detection: Silero VAD
+### Voice Activity Detection: Silero VAD (ONNX)
 
 | Property | Value |
 |----------|-------|
 | Size | 2MB |
-| Type | Neural network |
+| Type | Neural network (ONNX) |
+| Runtime | ONNX Runtime (shared with Kokoro TTS — no PyTorch dependency) |
 | Latency | ~30ms |
 | What it detects | Speech vs silence, ignores keyboard typing, fan noise, coughs |
 | Silence threshold | 1.5s (configurable) |
+| Chunk size | 512 samples at 16kHz (32ms) + 64-sample context window |
 
 ### How `listen` Works Internally
 
@@ -467,8 +469,17 @@ No typing needed for the user's response. No Enter key. Fully hands-free when th
 
 ## Configuration
 
-### MCP Config (`.mcp.json` or Claude Desktop config)
+### MCP Config (per IDE)
 
+The installer writes the MCP server entry to the correct config file for each selected IDE:
+
+| IDE | Config Path |
+|-----|------------|
+| **Claude Code** | `~/.claude.json` |
+| **Cursor** | `~/.cursor/mcp.json` |
+| **Codex (OpenAI)** | `~/.codex/mcp.json` |
+
+All use the same server entry format:
 ```json
 {
   "mcpServers": {
@@ -480,7 +491,7 @@ No typing needed for the user's response. No Enter key. Fully hands-free when th
 }
 ```
 
-> **Note:** The installer writes the actual venv Python path during setup. The server finds its config and models from the standard locations. Environment variable overrides are available (see below) but not required for normal use.
+> **Note:** The installer writes the actual venv Python path during setup. Use `--claude`, `--cursor`, `--codex`, or `--all` flags to target specific IDEs, or let the installer auto-detect installed IDEs.
 
 ### Server Configuration File (`config.json`)
 
@@ -551,17 +562,17 @@ The main agent's voice is **not hardcoded**. Users choose it via:
 - `config.json` → `"default_voice": "am_eric"` (persists across sessions)
 - `set_voice` tool at runtime (session-only unless saved to config)
 
-### All Available Voices (53 total)
+### All Available Voices (54 total)
 
 **American English (20):**
-- Female: af_alloy, af_aoede, af_bella, af_heart, af_jessica, af_kore, af_nicole, af_nova, af_river, af_sarah, af_sky
-- Male: am_adam, am_echo, am_eric, am_fenrir, am_liam, am_michael, am_onyx, am_puck, am_santa
+- Female (11): af_alloy, af_aoede, af_bella, af_heart, af_jessica, af_kore, af_nicole, af_nova, af_river, af_sarah, af_sky
+- Male (9): am_adam, am_echo, am_eric, am_fenrir, am_liam, am_michael, am_onyx, am_puck, am_santa
 
 **British English (8):**
-- Female: bf_alice, bf_emma, bf_isabella, bf_lily
-- Male: bm_daniel, bm_fable, bm_george, bm_lewis
+- Female (4): bf_alice, bf_emma, bf_isabella, bf_lily
+- Male (4): bm_daniel, bm_fable, bm_george, bm_lewis
 
-**Other Languages (25):**
+**Other Languages (26):**
 - Spanish: ef_dora, em_alex, em_santa
 - French: ff_siwis
 - Hindi: hf_alpha, hf_beta, hm_omega, hm_psi
@@ -572,40 +583,36 @@ The main agent's voice is **not hardcoded**. Users choose it via:
 
 ---
 
-## Voice Behavior Rules (CLAUDE.md Template)
+## Voice Behavior Rules (IDE-Specific Injection)
 
-The MCP server handles the **mechanics** (synthesize, play, record, transcribe). The **behavioral rules** — when the AI should speak, the bookend pattern, sub-agent handoffs — are defined in a separate CLAUDE.md template file.
+The MCP server handles the **mechanics** (synthesize, play, record, transcribe). The **behavioral rules** — when the AI should speak, the bookend pattern, sub-agent voice assignment — are injected directly into each IDE's instruction file during install.
 
-### Installation
+### How It Works
 
-The installer creates a voice rules file at `~/.claude/agents/voice-rules.md` which the user references from their `~/.claude/CLAUDE.md`:
+The installer asks the user to pick a main agent voice (e.g., "Eric" → `am_eric`), then writes **personalized** behavior rules into the IDE's config:
 
-```markdown
-<!-- In ~/.claude/CLAUDE.md -->
-See also: ~/.claude/agents/voice-rules.md
-```
+| IDE | Rules Location | Method |
+|-----|---------------|--------|
+| **Claude Code** | `~/.claude/CLAUDE.md` | Appended block with sentinel comment |
+| **Cursor** | `~/.cursor/rules/agent-voice.mdc` | Standalone MDC file with `alwaysApply: true` |
+| **Codex (OpenAI)** | `~/.codex/AGENTS.md` | Appended block with sentinel comment |
 
-### Template Contents (voice-rules.md)
+All injected blocks are marked with `<!-- installed by agent-voice-mcp -->` for idempotent updates and clean uninstall.
 
-The template defines:
+### Rules Content
 
-1. **Bookend speaking pattern** — The AI speaks twice per response:
-   - Opening voice: brief acknowledgment, runs in background parallel with work (never blocking)
-   - Closing voice: mandatory summary, especially when asking questions
+The rules are personalized with the chosen main agent name and teach the AI:
 
-2. **When to speak** — Acknowledge user requests, summarize outcomes, ask questions, report errors
+1. **Voice identity** — "You are **Eric**. Always call `speak` with `name: "Eric"`."
+2. **Bookend speaking pattern** — Opening voice (`block: false`) + closing voice (`block: true`, never skip)
+3. **Mandatory voice for questions** — Whenever asking the user a question, MUST speak it aloud using `speak_then_listen` or `speak`
+4. **Sub-agent voice assignment** — Call `get_voice_registry` to see available voices, pick names matching Kokoro voices, never reuse the main agent's name
+5. **Handoff protocol** — Both agents speak on handoffs
+6. **Fallback** — Text-only when tools unavailable, respect muted state
 
-3. **Sub-agent voice rules** — Each sub-agent speaks when starting work, finishing, blocked, or handing off to another agent
+### Template
 
-4. **Handoff protocol** — When Agent A hands work to Agent B, both speak: A announces the handoff, B acknowledges
-
-5. **Voice state awareness** — "If the `speak` tool is available, use voice. If not, respond in text only."
-
-6. **Listen behavior** — When asking the user a question, call `listen()` to get a voice response. Fall back to text input gracefully.
-
-This template is **not injected into CLAUDE.md automatically** — it lives as a separate file that the user opts into by referencing it. This avoids conflicts with existing rules.
-
-> **Note:** The full template text is a separate implementation deliverable, not included in this spec. The structure above defines the required sections. The actual wording will be written during build, informed by the proven voice rules from the development sessions that led to this project.
+The raw template is at `templates/voice-rules.md` with `{{MAIN_AGENT}}` placeholders. The installer fills these in per the user's voice choice.
 
 ---
 
@@ -615,7 +622,7 @@ This template is **not injected into CLAUDE.md automatically** — it lives as a
 - **Python 3.11+** (3.11 or 3.12 recommended; 3.13/3.14 have compatibility issues with some deps)
 - **kokoro-onnx** — Kokoro TTS with ONNX Runtime (no PyTorch needed)
 - **faster-whisper** — Whisper STT with CTranslate2 optimization
-- **silero-vad** — Voice Activity Detection (speech vs silence)
+- **silero-vad** — Voice Activity Detection via ONNX Runtime (no PyTorch — uses the same ONNX Runtime as Kokoro TTS)
 - **soundfile** — Audio file I/O
 - **sounddevice** — Microphone capture
 - **mcp** — MCP Python SDK
@@ -641,10 +648,14 @@ This template is **not injected into CLAUDE.md automatically** — it lives as a
 ### Recommended: npx (one command, no cloning)
 
 ```bash
-npx agent-voice-mcp install
+npx agent-voice-mcp install              # Auto-detect installed IDEs
+npx agent-voice-mcp install --claude     # Claude Code only
+npx agent-voice-mcp install --cursor     # Cursor only
+npx agent-voice-mcp install --codex      # Codex (OpenAI) only
+npx agent-voice-mcp install --all        # All supported IDEs
 ```
 
-This is the simplest way to install. Run it from anywhere — no need to clone a repo or navigate to a folder. The installer handles everything interactively.
+Run from anywhere — no need to clone a repo or navigate to a folder. The installer detects existing tools and models, skips what's already installed, and only downloads/installs what's missing.
 
 ### What the installer does
 
@@ -653,46 +664,49 @@ This is the simplest way to install. Run it from anywhere — no need to clone a
 
 Step 1/6: Checking system dependencies...
   ✓ Python 3.12 found
-  ✓ espeak-ng found (or installing via brew)
-  ✓ mpv found (or installing via brew)
+  ✓ espeak-ng found
+  ✓ mpv found
 
-Step 2/6: Creating Python environment...
-  ✓ Created venv at ~/.local/share/agent-voice-mcp/
-  ✓ Installed kokoro-onnx, faster-whisper, silero-vad, mcp, sounddevice
+Step 2/6: Setting up Python environment...
+  ✓ Server files copied to ~/.local/share/agent-voice-mcp
+  ✓ Created venv at ~/.local/share/agent-voice-mcp/.venv
+  ✓ All packages installed
 
-Step 3/6: Downloading models (490MB)...
-  ✓ kokoro-v1.0.onnx (310MB)
-  ✓ voices-v1.0.bin (27MB)
-  ✓ whisper-base model (~150MB)
+Step 3/6: Checking models...
+  ✓ kokoro-v1.0.onnx already installed (or downloaded / symlinked from existing install)
+  ✓ voices-v1.0.bin already installed
+  ℹ whisper-base model (~150MB) will download automatically on first use
 
 Step 4/6: Configuring MCP server...
-  ✓ Added to ~/.claude/mcp.json
+  ℹ Detected: Claude Code, Cursor
+  ✓ Claude Code: already configured
+  ✓ Cursor: added to ~/.cursor/mcp.json
 
-Step 5/6: Requesting microphone access...
-  🎙️ macOS will ask for microphone permission — please click "Allow"
+Step 5/6: Checking microphone access...
   ✓ Microphone access granted
 
 Step 6/6: Setting up voice rules...
-  ? Choose your main agent voice:
-    ❯ am_eric (male, confident)
-      af_nova (female, clear)
-      am_onyx (male, deep)
-      am_adam (male, neutral)
-      [browse all 53 voices]
+  Choose your main agent voice:
+    1) Eric (am_eric — male, American, confident)
+    2) Nova (af_nova — female, American, clear)
+    ...
+  ✓ Main agent voice: Eric (am_eric)
+  ✓ Claude Code: voice rules added to ~/.claude/CLAUDE.md
+  ✓ Cursor: voice rules written to ~/.cursor/rules/agent-voice.mdc
 
-  ✓ Voice rules saved to ~/.claude/agents/voice-rules.md
-  ✓ Reference added to ~/.claude/CLAUDE.md
-
-🎉 Done! Start a new Claude Code session to hear your AI speak.
+🎉 Done! Configured for: Claude Code, Cursor
+   Restart your IDE session, then voice tools will be available.
    Run "npx agent-voice-mcp test" to hear a sample voice.
 ```
+
+**Smart detection:** Re-running the installer shows all green checkmarks — it's fully idempotent. It also detects existing Kokoro model files (e.g., from `~/.local/share/kokoro-tts/models/`) and symlinks them instead of re-downloading.
 
 ### Other npx commands
 
 ```bash
 npx agent-voice-mcp install      # Full interactive setup
 npx agent-voice-mcp test         # Play a sample voice to verify
-npx agent-voice-mcp voices       # Browse and preview all 53 voices
+npx agent-voice-mcp voices       # Browse and preview all 54 voices
 npx agent-voice-mcp config       # Re-run voice picker / change settings
 npx agent-voice-mcp uninstall    # Remove everything cleanly
 ```
@@ -705,13 +719,14 @@ npx agent-voice-mcp uninstall
 
 Prompts for confirmation, then removes:
 - Python venv at `~/.local/share/agent-voice-mcp/`
-- Models (490MB) at `~/.local/share/agent-voice-mcp/models/`
+- Models at `~/.local/share/agent-voice-mcp/models/`
 - Config at `~/.local/share/agent-voice-mcp/config.json`
 - Server log at `~/.local/share/agent-voice-mcp/server.log`
-- MCP server registration from `~/.claude/mcp.json`
-- Voice rules at `~/.claude/agents/voice-rules.md`
+- MCP server entries from all configured IDEs (Claude Code, Cursor, Codex)
+- Voice rules blocks from all IDE instruction files
+- Voice rules template at `~/.claude/agents/voice-rules.md`
 
-Does **not** remove: npm cache (managed by npm), references in user's CLAUDE.md (manual cleanup — we don't edit their CLAUDE.md without explicit consent).
+Does **not** remove: npm cache (managed by npm).
 
 ### Alternative: Git clone (for contributors)
 
@@ -753,30 +768,41 @@ agent-voice-mcp/
 ├── LICENSE                # Apache 2.0
 ├── package.json           # npm package (for npx agent-voice-mcp)
 ├── bin/
-│   └── cli.js             # npx entry point (install, test, voices, config, uninstall)
+│   ├── cli.js             # npx entry point — command router
+│   ├── install.js         # 6-step interactive installer
+│   ├── uninstall.js       # Clean removal with confirmation
+│   ├── test-voice.js      # Quick smoke test
+│   ├── voices.js          # Browse and preview all voices
+│   ├── config.js          # Re-run voice picker / change settings
+│   └── utils.js           # Shared helpers (Python discovery, IDE configs, logging)
 ├── install.sh             # Alternative setup script (for git clone)
 ├── config.json            # Default server configuration
-├── server.py              # MCP server entry point
+├── server.py              # MCP server entry point (10 tools via FastMCP)
+├── shared.py              # Constants, voice catalog, types, exceptions
+├── config.py              # Configuration management (load/save with env overrides)
+├── voice_registry.py      # Auto-discovery voice registry (name matching + hash)
+├── requirements.txt       # Python dependencies
 ├── tts/
+│   ├── __init__.py
 │   ├── kokoro_engine.py   # Kokoro ONNX wrapper (model loading, synthesis)
 │   ├── speech_queue.py    # Sequential speech queue (prevents overlap)
 │   └── audio_player.py    # Audio playback (mpv, afplay, aplay)
 ├── stt/
+│   ├── __init__.py
 │   ├── whisper_engine.py  # faster-whisper wrapper (model loading, transcription)
-│   ├── mic_capture.py     # Microphone recording with sounddevice
-│   └── vad.py             # Silero VAD integration (silence detection)
-├── voice_registry.py      # Auto-discovery voice registry (name matching + hash)
-├── requirements.txt       # Python dependencies
+│   ├── mic_capture.py     # Microphone recording with sounddevice (blocksize=512)
+│   └── vad.py             # Silero VAD via ONNX Runtime (no PyTorch)
 ├── templates/
-│   └── voice-rules.md     # CLAUDE.md voice behavior template
+│   └── voice-rules.md     # Voice behavior template ({{MAIN_AGENT}} placeholder)
 ├── models/                # Model files (downloaded during install)
 │   ├── kokoro-v1.0.onnx
 │   └── voices-v1.0.bin
 └── tests/
-    ├── test_tts.py
-    ├── test_stt.py
-    ├── test_registry.py
-    └── test_server.py
+    ├── conftest.py        # Shared mock fixtures
+    ├── test_tts.py        # 51 TTS tests
+    ├── test_stt.py        # 23 STT tests
+    ├── test_registry.py   # 20 registry tests
+    └── test_server.py     # 26 integration tests
 ```
 
 ---
@@ -868,7 +894,7 @@ Real-time factor: 0.12x (generates audio 8x faster than real-time)
 | TTS latency | <1s | 15-20s | Instant | 1-3s |
 | STT included | Yes | No | No | No |
 | Voice quality | Very good | Excellent | Medium | Excellent |
-| Voices | 53 | 322 | ~20 | 6 |
+| Voices | 54 | 322 | ~20 | 6 |
 | Multi-language | 8 languages | 74 languages | English-focused | ~50 languages |
 | Cost | Free | Free (unofficial) | Free | Paid (API) |
 | Voice cloning | No | No | No | No |
