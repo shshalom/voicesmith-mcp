@@ -227,6 +227,8 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
         speed: Speech speed multiplier (default 1.0).
         block: Whether to wait for playback to complete (default true).
     """
+    _capture_event_loop()
+
     if _tts_engine is None or _speech_queue is None:
         return {"success": False, "error": "tts_unavailable", "message": "TTS engine not loaded"}
 
@@ -600,31 +602,23 @@ def main():
     # Store event loop reference for HTTP→async bridge
     # FastMCP creates the loop internally; we capture it via a startup task
     _start_periodic_save_thread()
-    _start_event_loop_capture()
+    # Event loop is captured on first MCP tool call via _capture_event_loop()
     mcp.run(transport="stdio")
 
 
-def _start_event_loop_capture():
-    """Capture the asyncio event loop reference once it's running.
+def _capture_event_loop():
+    """Capture the asyncio event loop from within an async context.
 
-    Uses a thread that waits briefly then grabs the running loop.
-    This is needed for run_coroutine_threadsafe() in the HTTP handler.
+    Called on the first MCP tool invocation to grab the running loop
+    for use by the HTTP listener's run_coroutine_threadsafe().
     """
     global _event_loop
-
-    def _capture():
-        # Wait for the event loop to be created by FastMCP
-        time.sleep(1)
+    if _event_loop is None:
         try:
-            _loop = asyncio.get_event_loop()
-            if _loop.is_running():
-                globals()["_event_loop"] = _loop
-                logger.debug("Captured asyncio event loop for HTTP bridge")
+            _event_loop = asyncio.get_running_loop()
+            logger.info(f"Captured asyncio event loop for HTTP bridge")
         except RuntimeError:
-            logger.warning("Could not capture event loop for HTTP bridge")
-
-    thread = threading.Thread(target=_capture, daemon=True)
-    thread.start()
+            pass
 
 
 def _start_periodic_save_thread():
