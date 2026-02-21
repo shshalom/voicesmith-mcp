@@ -1,0 +1,38 @@
+{
+  "name": "agent-voice-mcp",
+  "version": "1.0.0",
+  "description": "Local AI voice for coding assistants — TTS & STT via MCP. Kokoro ONNX + faster-whisper, fully offline.",
+  "bin": {
+    "agent-voice-mcp": "bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "server.py",
+    "shared.py",
+    "config.py",
+    "config.json",
+    "voice_registry.py",
+    "requirements.txt",
+    "tts/",
+    "stt/",
+    "templates/"
+  ],
+  "keywords": [
+    "mcp",
+    "tts",
+    "stt",
+    "voice",
+    "kokoro",
+    "whisper",
+    "claude",
+    "ai-assistant"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
