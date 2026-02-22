@@ -9,7 +9,7 @@ The Agent Voice MCP Server provides AI-initiated listening via the `listen` and 
 - **Wake word engine:** openWakeWord (ONNX Runtime, local, ~200KB model)
 - **Text injection:** tmux send-keys (zero permissions, no window focus needed)
 - **Wake phrase:** "Hey listen" (single pre-trained model shipped with the package)
-- **Optional feature:** Installed with `--withVoiceWake` flag, toggleable at runtime
+- **Optional feature:** Installed with `--with-voice-wake` flag, toggleable at runtime
 - **Transparent UX:** Shell alias wraps `claude` in tmux invisibly — all flags and shortcuts work as normal
 
 ---
@@ -29,15 +29,19 @@ User says: "Hey listen... add error handling to the login"
 │  ├── Pauses wake listener                     │
 │  ├── Plays Tink ready sound                   │
 │  ├── Records speech (VAD + sounddevice)       │
-│  ├── Whisper transcribes                      │
-│  ├── tmux send-keys → target session          │
+│  ├── Whisper transcribes (reuses server's     │
+│  │   loaded WhisperEngine — no extra memory)  │
+│  ├── Escapes text, tmux send-keys → target    │
 │  └── Resumes wake listener                    │
 └──────────────────────────────────────────────┘
         │
-        ▼  tmux send-keys -t agent-voice-eric "add error handling to the login" Enter
+        ▼  tmux send-keys -t agent-voice-eric -l "add error handling to the login"
+        │  tmux send-keys -t agent-voice-eric Enter
         │
         ▼  Text appears in Claude Code prompt and submits
 ```
+
+**Note on text escaping:** tmux `send-keys -l` (literal flag) sends text as literal characters, preventing shell metacharacter injection. Backticks, `$(...)`, semicolons, pipes, etc. in transcribed text are sent as-is without shell interpretation. The `Enter` key is sent as a separate command.
 
 ### How the User Launches Claude
 
@@ -68,16 +72,38 @@ with open('$HOME/.local/share/agent-voice-mcp/config.json') as f:
                 command claude "$@"
             else
                 local session_name="agent-voice-$$"
+                # Serialize args to env var to preserve quoting
+                local args_file
+                args_file=$(mktemp /tmp/agent-voice-args.XXXXXX)
+                printf '%s\0' "$@" > "$args_file"
                 tmux -f "$HOME/.local/share/agent-voice-mcp/tmux.conf" \
                     new-session -s "$session_name" \
                     -e "AGENT_VOICE_TMUX=$session_name" \
-                    "command claude $*"
+                    -e "AGENT_VOICE_ARGS=$args_file" \
+                    "$HOME/.local/share/agent-voice-mcp/tmux-launcher.sh"
             fi
         }
         alias claude='claude-voice'
     fi
     unset _agent_voice_wake_enabled
 fi
+```
+
+**File: `~/.local/share/agent-voice-mcp/tmux-launcher.sh`**
+
+Reads serialized args and launches claude with proper quoting:
+
+```bash
+#!/bin/bash
+# Launched inside tmux — reads args from file, runs claude, cleans up
+args=()
+if [ -f "$AGENT_VOICE_ARGS" ]; then
+    while IFS= read -r -d '' arg; do
+        args+=("$arg")
+    done < "$AGENT_VOICE_ARGS"
+    rm -f "$AGENT_VOICE_ARGS"
+fi
+exec command claude "${args[@]}"
 ```
 
 **File: `~/.local/share/agent-voice-mcp/tmux.conf`**
@@ -88,9 +114,13 @@ Minimal tmux config for invisible operation:
 # Agent Voice MCP — tmux config (invisible mode)
 set -g status off
 set -g mouse on
-set -g prefix None
+set -g prefix C-b        # Keep default prefix (required by tmux)
 set -g escape-time 0
+set -g destroy-unattached on   # Auto-destroy session when client detaches/exits
+set -g remain-on-exit off      # Don't keep pane after process exits
 ```
+
+**Note on `prefix`:** tmux requires a prefix key — `None` is not valid on older versions. We keep the default `C-b` which is harmless since the user interacts normally and never needs tmux commands. `destroy-unattached on` ensures sessions are cleaned up when the process exits or crashes.
 
 **Added to `~/.zshrc` (or `~/.bashrc`):**
 
@@ -106,6 +136,8 @@ set -g escape-time 0
 - If the package is removed, the source line silently does nothing (file check)
 - The alias is only created if wake word is enabled in config
 - Existing tmux users are handled (detects `$TMUX`)
+- Args are serialized to preserve quoting (`claude -c "do something"` works correctly)
+- tmux sessions auto-destroy on exit/crash (no lingering sessions)
 
 **User experience:** The user types `claude` exactly as before. All flags work (`-c`, `-p`, `-r`, `--model`, etc.). All keyboard shortcuts pass through. tmux is invisible — no status bar, no visible change.
 
@@ -135,9 +167,9 @@ The wake word listener runs as a **daemon thread** inside the MCP server process
                               │         ▼                          │
                               │   ┌───────────┐                   │
                               │   │ RECORDING  │                   │
-                              │   │ (speech)   │                   │
+                              │   │ (speech)   │ timeout: 10s max  │
                               │   └─────┬─────┘                   │
-                              │         │ silence / transcribed    │
+                              │         │ silence / timeout        │
                               │         ▼                          │
                               │   ┌───────────┐                   │
                               │   │ INJECTING  │ ──────────────────┘
@@ -172,6 +204,15 @@ Only one component can use the mic at a time:
 2. AI's `listen` tool opens mic, records, transcribes, returns
 3. AI's `listen` tool signals done → wake listener resumes
 
+### Recording Timeout
+
+After wake word detection, the RECORDING state has a **maximum duration of 10 seconds**. If the user says nothing after the Tink sound (accidental trigger), the recording times out:
+
+- 5 seconds of no speech detected → abort, resume wake listener (no notification)
+- 10 seconds total recording limit → stop, transcribe whatever was captured, resume
+
+This prevents the wake listener from being stuck in RECORDING indefinitely.
+
 ### Audio Format Switching
 
 openWakeWord needs int16 at 16kHz, 1280-sample blocks.
@@ -180,8 +221,19 @@ VAD/Whisper needs float32 at 16kHz, 512-sample blocks.
 When switching from wake word detection to speech recording:
 1. Close the int16 stream
 2. Flush audio buffers (prevents wake phrase echo in transcription)
-3. Open a float32 stream with 512-sample blocksize
-4. Record until VAD detects silence
+3. Wait 100ms (allows the OS audio subsystem to release the device)
+4. Open a float32 stream with 512-sample blocksize
+5. If the stream fails to open (another process grabbed the mic), retry up to 3 times with 200ms backoff
+6. Record until VAD detects 1.5s silence or 10s max
+
+### Whisper Model Reuse
+
+The wake word listener **reuses the existing `WhisperEngine` instance** loaded by the MCP server at startup. No separate model is loaded. The transcription call is routed through the same `_stt_engine` global, wrapped in `run_in_executor` for async safety.
+
+This means:
+- Zero additional memory for transcription
+- Same model, same accuracy, same language setting
+- The wake listener calls the same code path as the `listen` MCP tool
 
 ---
 
@@ -204,26 +256,67 @@ A custom openWakeWord model trained for the phrase "Hey listen", shipped as a ~2
 
 ### Future: Custom Wake Words
 
-A future `npx agent-voice-mcp train-wake-word "Hey Nova"` command could run the training pipeline locally or via Colab. Not in scope for v1.
+A future `npx agent-voice-mcp train-wake-word "Hey Nova"` command could run the training pipeline locally or via Colab. Not in scope for v1. Training requires ~100 synthetic positive samples and ~1000 negative samples, taking approximately 1 hour on Colab.
+
+---
+
+## Session Registry
+
+### Definition
+
+The session registry is a shared JSON file at `~/.local/share/agent-voice-mcp/sessions.json` that tracks all active MCP server sessions. It is the same registry defined in `session_registry.py` (already implemented).
+
+**Schema:**
+```json
+{
+  "sessions": [
+    {
+      "name": "Eric",
+      "voice": "am_eric",
+      "port": 7865,
+      "pid": 12345,
+      "tmux_session": "agent-voice-12345",
+      "started_at": "2026-02-22T10:00:00Z"
+    }
+  ]
+}
+```
+
+**New field:** `tmux_session` — the tmux session name read from `$AGENT_VOICE_TMUX`. May be `null` if the user didn't launch via the alias (wake word won't work for that session, but all other features do).
+
+### Lifecycle
+
+- **On startup:** Server registers itself in `sessions.json` (including `tmux_session` from env). Uses `flock` for concurrent access. Cleans stale entries (dead PIDs).
+- **On shutdown:** Server removes its entry. Uses `flock`.
+- **On crash:** Next server startup cleans stale entries via PID check. tmux session auto-destroys via `destroy-unattached on`.
+
+### Session Name Constraints
+
+Session names are agent voice names (Eric, Nova, Fenrir, etc.) — these are **proper nouns that don't collide with common English words**. The name matching logic in multi-session routing is safe because:
+- Names come from the Kokoro voice catalog (all proper nouns)
+- The first session gets the user's configured name (e.g., Eric)
+- Subsequent sessions get auto-assigned names from the catalog
+- Common words like "run", "test", "add" will never match a session name
 
 ---
 
 ## Multi-Session Routing
 
-### Session Name from tmux
-
-Each Claude Code session runs in a tmux session named `agent-voice-<PID>`. The MCP server reads `$AGENT_VOICE_TMUX` to know its own tmux session name.
-
 ### Routing Logic
 
 When the wake word triggers and speech is transcribed:
 
-1. Read `sessions.json` to get all active sessions
-2. If only one session → send text there (no name parsing needed)
-3. If multiple sessions → parse the first word of the transcription:
+1. Read `sessions.json` to get all active sessions (filter stale PIDs)
+2. Filter to sessions that have a `tmux_session` value (wake word only works with tmux)
+3. If only one tmux session → send text there (no name parsing needed)
+4. If multiple tmux sessions → parse the first word of the transcription:
    - Matches a session name (case-insensitive) → route to that session, strip the name from the message
    - No match → route to the most recently started session, keep full text
-4. `tmux send-keys -t <session_name> "<message>" Enter`
+5. Escape text and send via tmux:
+   ```bash
+   tmux send-keys -t <tmux_session> -l "<message>"
+   tmux send-keys -t <tmux_session> Enter
+   ```
 
 **Example:**
 ```
@@ -244,7 +337,7 @@ Sessions: [Eric:agent-voice-123]
 
 The wake word feature is optional. Installed with:
 ```bash
-npx agent-voice-mcp install --withVoiceWake
+npx agent-voice-mcp install --with-voice-wake
 ```
 
 Without the flag, the feature is not installed:
@@ -294,7 +387,7 @@ The `status` tool includes wake word state:
 
 ## Installation Details
 
-### What `--withVoiceWake` adds to the install
+### What `--with-voice-wake` adds to the install
 
 **Step 1 (system deps):** Also checks for tmux, installs via brew if missing.
 
@@ -304,6 +397,7 @@ The `status` tool includes wake word state:
 
 **Step 6 (voice rules):** Also:
 - Creates `~/.local/share/agent-voice-mcp/shell-init.sh` (functions + alias)
+- Creates `~/.local/share/agent-voice-mcp/tmux-launcher.sh` (arg-preserving launcher)
 - Creates `~/.local/share/agent-voice-mcp/tmux.conf` (invisible tmux config)
 - Adds one source line to `~/.zshrc` (or `~/.bashrc`):
 ```bash
@@ -317,9 +411,10 @@ The `status` tool includes wake word state:
 
 `npx agent-voice-mcp uninstall` also:
 - Removes the source line from `~/.zshrc` / `~/.bashrc`
-- Removes `shell-init.sh` and `tmux.conf` (part of the install dir cleanup)
+- Removes `shell-init.sh`, `tmux-launcher.sh`, and `tmux.conf` (part of the install dir cleanup)
 - Removes the wake word model
 - Removes openWakeWord pip package (if no other package depends on it)
+- Kills any lingering `agent-voice-*` tmux sessions
 
 ---
 
@@ -345,12 +440,20 @@ Total additional footprint: ~3MB. No torch, no GPU.
     "enabled": false,
     "model": "hey_listen",
     "threshold": 0.5,
-    "ready_sound": "/System/Library/Sounds/Tink.aiff"
+    "ready_sound": "tink",
+    "recording_timeout": 10,
+    "no_speech_timeout": 5
   }
 }
 ```
 
-`enabled` defaults to `false`. Set to `true` by the installer when `--withVoiceWake` is used.
+`enabled` defaults to `false`. Set to `true` by the installer when `--with-voice-wake` is used.
+
+**`ready_sound`:** Platform-aware. `"tink"` resolves to `/System/Library/Sounds/Tink.aiff` on macOS. On Linux, falls back to a bundled WAV file or `paplay` with a system sound. Set to `null` to disable.
+
+**`recording_timeout`:** Max seconds to record after wake word (default 10).
+
+**`no_speech_timeout`:** Seconds of no speech after Tink before aborting (default 5).
 
 ### Environment Variables
 
@@ -367,13 +470,15 @@ Total additional footprint: ~3MB. No torch, no GPU.
 |------|--------|------|
 | `wake_listener.py` | Create | Wake word listener thread (openWakeWord + recording + tmux inject) |
 | `shell-init.sh` | Create | Shell functions + alias (sourced from .zshrc) |
+| `tmux-launcher.sh` | Create | Arg-preserving claude launcher for tmux |
 | `tmux.conf` | Create | Minimal invisible tmux configuration |
 | `server.py` | Modify | Start/stop wake listener, new tools (wake_enable/disable), mic handoff |
+| `session_registry.py` | Modify | Add `tmux_session` field to session entries |
 | `config.py` | Modify | Add wake_word config section |
 | `config.json` | Modify | Add wake_word defaults |
 | `shared.py` | Modify | Add wake word constants |
-| `bin/install.js` | Modify | `--withVoiceWake` flag: install tmux, openwakeword, shell-init, model |
-| `bin/uninstall.js` | Modify | Remove source line from shell profile, clean up |
+| `bin/install.js` | Modify | `--with-voice-wake` flag: install tmux, openwakeword, shell-init, model |
+| `bin/uninstall.js` | Modify | Remove source line from shell profile, kill tmux sessions |
 | `install.sh` | Modify | Same additions for shell installer |
 | `models/hey_listen.onnx` | Create | Trained wake word model (or hey_jarvis stand-in) |
 | `tests/test_wake.py` | Create | Wake listener tests |
@@ -384,24 +489,29 @@ Total additional footprint: ~3MB. No torch, no GPU.
 
 - Wake word listener runs locally, no network
 - Mic audio is processed in-memory, never saved to disk
+- **tmux send-keys uses `-l` (literal) flag** — transcribed text is sent as literal characters, preventing shell metacharacter injection (backticks, `$(...)`, semicolons, pipes are not interpreted)
 - tmux send-keys is local IPC, no network
 - The shell alias only affects the user who installed it
-- Feature is opt-in (`--withVoiceWake`)
+- Feature is opt-in (`--with-voice-wake`)
 
 ---
 
 ## Verification
 
-1. `npx agent-voice-mcp install --withVoiceWake` → installs tmux, openwakeword, alias
+1. `npx agent-voice-mcp install --with-voice-wake` → installs tmux, openwakeword, shell-init
 2. Open new terminal → `claude` launches inside tmux (invisible)
-3. `status` tool shows `wake_word.listening: true`
-4. Say "Hey listen" → Tink sound plays
-5. Say "hello world" → text appears in Claude Code prompt and submits
-6. AI responds to "hello world"
-7. Multi-session: start second session → say "Hey listen, Nova, run the tests" → routes to Nova
-8. `wake_disable` tool → wake listener stops, mic released
-9. `wake_enable` tool → wake listener resumes
-10. `npx agent-voice-mcp uninstall` → alias removed from .zshrc, clean state
+3. Verify: `claude -c` and `claude "do something"` work (arg quoting preserved)
+4. `status` tool shows `wake_word.listening: true` and `tmux_session`
+5. Say "Hey listen" → Tink sound plays
+6. Say "hello world" → text appears in Claude Code prompt and submits
+7. Say "Hey listen" and say nothing → 5s timeout, resumes listening silently
+8. AI responds to "hello world"
+9. Multi-session: start second session → say "Hey listen, Nova, run the tests" → routes to Nova
+10. `wake_disable` tool → wake listener stops, mic released
+11. `wake_enable` tool → wake listener resumes
+12. Close Claude Code → tmux session auto-destroys (no lingering)
+13. `kill -9` the server → tmux session auto-destroys, sessions.json cleaned on next start
+14. `npx agent-voice-mcp uninstall` → source line removed from .zshrc, clean state
 
 ---
 
@@ -410,16 +520,16 @@ Total additional footprint: ~3MB. No torch, no GPU.
 - **macOS and Linux only** — tmux not available on Windows
 - **Terminal-based IDEs only** — Claude Code, Codex CLI. GUI editors (Cursor, VS Code) need a different injection method (future work)
 - **One mic at a time** — Wake listener yields mic when AI listens, may miss wake words during AI listen calls
-- **"Hey listen" only for v1** — Custom wake phrases require model training (future)
+- **"Hey listen" only for v1** — Custom wake phrases require model training (~1 hour on Colab, ~100 positive + ~1000 negative samples)
 - **tmux required** — Adds a dependency, though the alias makes it transparent
 
 ---
 
 ## Future Enhancements
 
-- Custom wake word training: `npx agent-voice-mcp train-wake-word "Hey Eric"`
+- Custom wake word training: `npx agent-voice-mcp train-wake-word "Hey Eric"` (~1 hour, requires ~100 synthetic positive samples + ~1000 negative samples)
 - GUI editor support via InputMethodKit or sendkeys
 - Visual indicator (menu bar icon) when wake listener is active
-- Configurable post-wake-word timeout
+- Linux ready sound via bundled WAV + `aplay` / `paplay`
 - Wake word sensitivity tuning per environment (noisy vs quiet)
 - "Hey listen, all" to broadcast to all sessions
