@@ -41,41 +41,73 @@ User says: "Hey listen... add error handling to the login"
 
 ### How the User Launches Claude
 
-The installer adds a shell function + alias to the user's shell profile (`~/.zshrc` or `~/.bashrc`):
+The installer creates a shell initialization script and adds a single source line to the user's shell profile.
+
+**File: `~/.local/share/agent-voice-mcp/shell-init.sh`**
+
+Contains all functions, aliases, and tmux configuration:
 
 ```bash
-# Added by agent-voice-mcp installer
-claude-voice() {
-    local session_name="agent-voice-$$"
-    tmux new-session -s "$session_name" \
-        -e "AGENT_VOICE_TMUX=$session_name" \
-        "claude $*"
-}
-alias claude='claude-voice'
-```
+#!/bin/bash
+# Agent Voice MCP — Shell initialization
+# Sourced from ~/.zshrc or ~/.bashrc
 
-**User experience:** The user types `claude` exactly as before. All flags work (`-c`, `-p`, `-r`, `--model`, etc.). All keyboard shortcuts pass through. tmux is invisible — no status bar, no visible change. The only difference: the terminal runs inside a named tmux session that the wake word listener can target.
+# Only set up the alias if wake word feature is enabled
+if [ -f "$HOME/.local/share/agent-voice-mcp/config.json" ]; then
+    _agent_voice_wake_enabled=$(python3 -c "
+import json
+with open('$HOME/.local/share/agent-voice-mcp/config.json') as f:
+    print(json.load(f).get('wake_word', {}).get('enabled', False))
+" 2>/dev/null)
 
-**tmux configuration** (set by the alias or a minimal tmux config):
-- No status bar: `set -g status off`
-- Mouse passthrough: `set -g mouse on`
-- No prefix key conflicts: uses a non-conflicting prefix
-
-**If the user already uses tmux:** The alias detects if already inside tmux and skips wrapping:
-```bash
-claude-voice() {
-    if [ -n "$TMUX" ]; then
-        # Already in tmux — just set the env var and run claude directly
-        export AGENT_VOICE_TMUX=$(tmux display-message -p '#S')
-        claude "$@"
-    else
-        local session_name="agent-voice-$$"
-        tmux new-session -s "$session_name" \
-            -e "AGENT_VOICE_TMUX=$session_name" \
-            "claude $*"
+    if [ "$_agent_voice_wake_enabled" = "True" ]; then
+        claude-voice() {
+            if [ -n "$TMUX" ]; then
+                # Already in tmux — just set the env var and run claude directly
+                export AGENT_VOICE_TMUX=$(tmux display-message -p '#S')
+                command claude "$@"
+            else
+                local session_name="agent-voice-$$"
+                tmux -f "$HOME/.local/share/agent-voice-mcp/tmux.conf" \
+                    new-session -s "$session_name" \
+                    -e "AGENT_VOICE_TMUX=$session_name" \
+                    "command claude $*"
+            fi
+        }
+        alias claude='claude-voice'
     fi
-}
+    unset _agent_voice_wake_enabled
+fi
 ```
+
+**File: `~/.local/share/agent-voice-mcp/tmux.conf`**
+
+Minimal tmux config for invisible operation:
+
+```
+# Agent Voice MCP — tmux config (invisible mode)
+set -g status off
+set -g mouse on
+set -g prefix None
+set -g escape-time 0
+```
+
+**Added to `~/.zshrc` (or `~/.bashrc`):**
+
+```bash
+# agent-voice-mcp
+[ -f ~/.local/share/agent-voice-mcp/shell-init.sh ] && source ~/.local/share/agent-voice-mcp/shell-init.sh
+```
+
+**Benefits:**
+- `.zshrc` stays clean — one line
+- All logic lives in the package — easy to update without touching shell config
+- Uninstall removes the source line + the files
+- If the package is removed, the source line silently does nothing (file check)
+- The alias is only created if wake word is enabled in config
+- Existing tmux users are handled (detects `$TMUX`)
+
+**User experience:** The user types `claude` exactly as before. All flags work (`-c`, `-p`, `-r`, `--model`, etc.). All keyboard shortcuts pass through. tmux is invisible — no status bar, no visible change.
 
 ---
 
@@ -270,34 +302,22 @@ The `status` tool includes wake word state:
 
 **Step 3 (models):** Also downloads the "Hey listen" wake word model to `models/hey_listen.onnx`.
 
-**Step 6 (voice rules):** Also adds the shell alias to `~/.zshrc` (or `~/.bashrc`):
+**Step 6 (voice rules):** Also:
+- Creates `~/.local/share/agent-voice-mcp/shell-init.sh` (functions + alias)
+- Creates `~/.local/share/agent-voice-mcp/tmux.conf` (invisible tmux config)
+- Adds one source line to `~/.zshrc` (or `~/.bashrc`):
 ```bash
-# agent-voice-mcp: Voice wake word support
-claude-voice() {
-    if [ -n "$TMUX" ]; then
-        export AGENT_VOICE_TMUX=$(tmux display-message -p '#S')
-        command claude "$@"
-    else
-        local session_name="agent-voice-$$"
-        tmux new-session -s "$session_name" \
-            -e "AGENT_VOICE_TMUX=$session_name" \
-            "command claude $*"
-    fi
-}
-alias claude='claude-voice'
+# agent-voice-mcp
+[ -f ~/.local/share/agent-voice-mcp/shell-init.sh ] && source ~/.local/share/agent-voice-mcp/shell-init.sh
 ```
 
-**Sentinel comment** for clean uninstall:
-```bash
-# BEGIN agent-voice-mcp wake word
-...
-# END agent-voice-mcp wake word
-```
+**Sentinel comment** for clean uninstall — the source line is identified by the `# agent-voice-mcp` comment.
 
 ### Uninstall
 
 `npx agent-voice-mcp uninstall` also:
-- Removes the shell alias block from `~/.zshrc` / `~/.bashrc`
+- Removes the source line from `~/.zshrc` / `~/.bashrc`
+- Removes `shell-init.sh` and `tmux.conf` (part of the install dir cleanup)
 - Removes the wake word model
 - Removes openWakeWord pip package (if no other package depends on it)
 
@@ -346,12 +366,14 @@ Total additional footprint: ~3MB. No torch, no GPU.
 | File | Action | What |
 |------|--------|------|
 | `wake_listener.py` | Create | Wake word listener thread (openWakeWord + recording + tmux inject) |
+| `shell-init.sh` | Create | Shell functions + alias (sourced from .zshrc) |
+| `tmux.conf` | Create | Minimal invisible tmux configuration |
 | `server.py` | Modify | Start/stop wake listener, new tools (wake_enable/disable), mic handoff |
 | `config.py` | Modify | Add wake_word config section |
 | `config.json` | Modify | Add wake_word defaults |
 | `shared.py` | Modify | Add wake word constants |
-| `bin/install.js` | Modify | `--withVoiceWake` flag: install tmux, openwakeword, alias, model |
-| `bin/uninstall.js` | Modify | Remove alias from shell profile, clean up wake word files |
+| `bin/install.js` | Modify | `--withVoiceWake` flag: install tmux, openwakeword, shell-init, model |
+| `bin/uninstall.js` | Modify | Remove source line from shell profile, clean up |
 | `install.sh` | Modify | Same additions for shell installer |
 | `models/hey_listen.onnx` | Create | Trained wake word model (or hey_jarvis stand-in) |
 | `tests/test_wake.py` | Create | Wake listener tests |
