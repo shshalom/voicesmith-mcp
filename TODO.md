@@ -32,7 +32,7 @@
 | # | Status | Feature | Notes |
 |---|--------|---------|-------|
 | 11 | 🔴 | Menu bar indicator for wake listener | Show mic state (active/recording/disabled), click to toggle. Use `rumps` (Python) or native Swift. |
-| 12 | 🔴 | Session preheat / agent intro | On session start, AI speaks a short greeting ("Eric here, ready to go."). Via Claude Code `SessionStart` hook. Warms up TTS engine. |
+| 12 | 🟢 | Session preheat / agent intro | AI calls `status` on first response, discovers assigned name, speaks intro. Combined with name discovery. |
 | 13 | 🟢 | Tink ready sound after wake word | Plays before recording starts |
 | 14 | 🔴 | Timeout nudge on listen | After listen timeout, AI speaks "I didn't catch that, go ahead and type it." |
 

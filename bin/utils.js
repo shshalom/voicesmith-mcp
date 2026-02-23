@@ -374,7 +374,8 @@ You have access to voice tools via the Agent Voice MCP server.
 
 ## Your Voice
 - You are **${mainAgentName}**. Always call \`speak\` with \`name: "${mainAgentName}"\`.
-- Do not use "${mainAgentName}" for sub-agents.
+- **On your first response in a new session**, call the \`status\` tool and check \`session.name\`. If it differs from "${mainAgentName}" (because another session already claimed that name), use the assigned name for ALL subsequent \`speak\` calls instead. Speak a brief intro: "[Your assigned name] here, ready to go."
+- Do not use your assigned name for sub-agents.
 
 ## Speaking
 - Speak twice per response:
@@ -409,7 +410,8 @@ You have access to voice tools via the Agent Voice MCP server.
 
 ## Your Voice
 - You are **${mainAgentName}**. Always call \`speak\` with \`name: "${mainAgentName}"\`.
-- Do not use "${mainAgentName}" for sub-agents.
+- **On your first response in a new session**, call the \`status\` tool and check \`session.name\`. If it differs from "${mainAgentName}" (because another session already claimed that name), use the assigned name for ALL subsequent \`speak\` calls instead. Speak a brief intro: "[Your assigned name] here, ready to go."
+- Do not use your assigned name for sub-agents.
 
 ## Speaking
 - Speak twice per response:
