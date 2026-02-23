@@ -44,6 +44,7 @@ def _setup_server_globals(
     server._mic_capture = mic_capture
     server._registry = registry or VoiceRegistry()
     server._muted = muted
+    server._wake_listener = None
     server._listen_active = False
     server._listen_cancel_event = None
     server._config = MagicMock()

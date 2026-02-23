@@ -280,7 +280,8 @@ class WakeWordListener:
             self._state = WakeState.RECORDING
 
         # Flush and wait for audio system to settle
-        time.sleep(0.15)
+        # Needs enough time for the wake phrase audio to clear from the mic buffer
+        time.sleep(0.5)
 
         # Play ready sound
         if self._ready_sound:

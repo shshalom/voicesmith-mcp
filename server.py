@@ -285,6 +285,11 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
 
     voice_id, auto_assigned = _registry.get_voice(name)
 
+    # Pause wake listener during TTS to prevent it hearing our own speech
+    wake_was_listening = _wake_listener is not None and _wake_listener.is_listening
+    if wake_was_listening and block:
+        _wake_listener.yield_mic()
+
     try:
         result = await _speech_queue.speak(text, voice_id, speed, block)
 
@@ -296,7 +301,7 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
                 "queued": True,
             }
 
-        return {
+        response = {
             "success": result.success,
             "voice": voice_id,
             "auto_assigned": auto_assigned,
@@ -305,7 +310,13 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
         }
     except Exception as e:
         logger.error(f"speak failed: {e}")
-        return {"success": False, "error": "speak_failed", "message": str(e)}
+        response = {"success": False, "error": "speak_failed", "message": str(e)}
+
+    # Resume wake listener after TTS
+    if wake_was_listening and block and _wake_listener is not None:
+        _wake_listener.reclaim_mic()
+
+    return response
 
 
 @mcp.tool()
