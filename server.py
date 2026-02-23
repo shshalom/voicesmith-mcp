@@ -271,6 +271,14 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
     """
     _capture_event_loop()
 
+    # Session voice override: if the AI uses the configured main_agent name
+    # but this session was assigned a different name (e.g., "Eric" is taken,
+    # this session is "Adam"), use the session's actual name instead.
+    if (_session_info and _config
+            and name == _config.main_agent
+            and _session_info["name"] != _config.main_agent):
+        name = _session_info["name"]
+
     if _tts_engine is None or _speech_queue is None:
         return {"success": False, "error": "tts_unavailable", "message": "TTS engine not loaded"}
 
