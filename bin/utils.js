@@ -373,8 +373,9 @@ ${VOICE_RULES_SENTINEL}
 You have access to voice tools via the Agent Voice MCP server.
 
 ## Your Voice
-- You are **${mainAgentName}**. Always call \`speak\` with \`name: "${mainAgentName}"\`.
-- **On your first response in a new session**, call the \`status\` tool and check \`session.name\`. If it differs from "${mainAgentName}" (because another session already claimed that name), use the assigned name for ALL subsequent \`speak\` calls instead. Speak a brief intro: "[Your assigned name] here, ready to go."
+- Your default voice name is **${mainAgentName}**, but your actual assigned name may differ if another session claimed it first.
+- **IMPORTANT:** If your session context says "Your assigned voice for this session is: [Name]", use THAT name — not "${mainAgentName}". This is your real identity for this session.
+- On your first response, speak a brief intro using your assigned name: "[Name] here, ready to go."
 - Do not use your assigned name for sub-agents.
 
 ## Speaking
@@ -409,8 +410,9 @@ ${VOICE_RULES_SENTINEL}
 You have access to voice tools via the Agent Voice MCP server.
 
 ## Your Voice
-- You are **${mainAgentName}**. Always call \`speak\` with \`name: "${mainAgentName}"\`.
-- **On your first response in a new session**, call the \`status\` tool and check \`session.name\`. If it differs from "${mainAgentName}" (because another session already claimed that name), use the assigned name for ALL subsequent \`speak\` calls instead. Speak a brief intro: "[Your assigned name] here, ready to go."
+- Your default voice name is **${mainAgentName}**, but your actual assigned name may differ if another session claimed it first.
+- **IMPORTANT:** If your session context says "Your assigned voice for this session is: [Name]", use THAT name — not "${mainAgentName}". This is your real identity for this session.
+- On your first response, speak a brief intro using your assigned name: "[Name] here, ready to go."
 - Do not use your assigned name for sub-agents.
 
 ## Speaking
