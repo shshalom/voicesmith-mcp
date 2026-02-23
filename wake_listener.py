@@ -47,7 +47,7 @@ class WakeWordListener:
         self,
         stt_engine,
         vad,
-        wake_model_name: str = "hey_jarvis_v0.1",
+        wake_model_name: str = "hey_listen",
         threshold: float = DEFAULT_WAKE_THRESHOLD,
         tmux_session: Optional[str] = None,
         ready_sound: str = "tink",
@@ -74,13 +74,35 @@ class WakeWordListener:
         self._wake_model = None
         try:
             from openwakeword.model import Model
-            self._wake_model = Model(
-                wakeword_models=[wake_model_name],
-                inference_framework="onnx",
-            )
+
+            # Check for custom model in our models directory
+            model_path = self._find_wake_model(wake_model_name)
+            if model_path:
+                self._wake_model = Model(
+                    wakeword_models=[model_path],
+                    inference_framework="onnx",
+                )
+            else:
+                # Fall back to openwakeword's built-in models
+                self._wake_model = Model(
+                    wakeword_models=[wake_model_name],
+                    inference_framework="onnx",
+                )
             logger.info(f"Wake word model loaded: {wake_model_name}")
         except Exception as e:
             logger.error(f"Failed to load wake word model: {e}")
+
+    @staticmethod
+    def _find_wake_model(name: str) -> Optional[str]:
+        """Find a wake word model ONNX file by name."""
+        search_paths = [
+            os.path.join(os.path.dirname(__file__), "models", f"{name}.onnx"),
+            os.path.expanduser(f"~/.local/share/agent-voice-mcp/models/{name}.onnx"),
+        ]
+        for p in search_paths:
+            if os.path.exists(p):
+                return p
+        return None
 
     @staticmethod
     def _resolve_sound(sound: str) -> Optional[str]:

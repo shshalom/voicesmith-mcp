@@ -10,6 +10,8 @@ build/
 
 # Models (downloaded during install, too large for git)
 models/
+# Exception: wake word models are small (~200KB) and ship with the package
+!models/hey_listen.onnx
 
 # IDE
 .idea/
