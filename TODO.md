@@ -15,10 +15,10 @@
 |---|--------|---------|-------|
 | 1 | 🟢 | Wake word detection (openWakeWord) | "Hey listen" model trained and working |
 | 2 | 🟢 | Cross-session mic lock | Only one session owns the wake mic (flock) |
-| 3 | 🔴 | tmux alias integration | shell-init.sh written but not yet tested end-to-end with Claude Code |
-| 4 | 🔴 | Full flow test: wake → record → transcribe → tmux inject | Blocked on tmux alias being active |
+| 3 | 🟢 | tmux alias integration | shell-init.sh deployed, alias works transparently |
+| 4 | 🟢 | Full flow test: wake → record → transcribe → tmux inject | Tested and working end-to-end |
 | 5 | 🟢 | Wake enable/disable MCP tools | `wake_enable`, `wake_disable` implemented |
-| 6 | 🔴 | Multi-session name routing | Code written but untested with real tmux sessions |
+| 6 | 🟡 | Multi-session name routing | Code written, single-session tested. Multi-session name parsing untested. |
 
 ### Session Management
 | # | Status | Feature | Notes |
@@ -42,7 +42,7 @@
 | 15 | 🟢 | Multi-IDE support (Claude Code, Cursor, Codex) | --claude, --cursor, --codex, --all flags |
 | 16 | 🟢 | --with-voice-wake flag | Installs tmux, openwakeword, shell scripts, enables in config |
 | 17 | 🟢 | Personalized voice rules injection | Per-IDE, with voice picker, sentinel comments |
-| 18 | 🔴 | Deploy shell-init.sh and source line to .zshrc | Code written but not tested in installer flow |
+| 18 | 🟢 | Deploy shell-init.sh and source line to .zshrc | Deployed and tested — alias works |
 
 ### Voice Rules / Behavior
 | # | Status | Feature | Notes |
@@ -59,7 +59,7 @@
 |---|--------|-------|-------|
 | 22 | 🟢 | Multiple sessions competing for mic | Fixed with wake mic flock |
 | 23 | 🔴 | Stale sessions not cleaned up on crash | PID check works but only runs on next startup. Could add periodic cleanup. |
-| 24 | 🔴 | tmux_session always null without alias | Wake word text injection doesn't work until user launches via tmux alias |
+| 24 | 🟢 | tmux_session always null without alias | Fixed — alias sets AGENT_VOICE_TMUX env var |
 | 25 | 🔴 | Wake listener doesn't release mic cleanly when MCP server crashes | flock handles it, but sounddevice stream may leak. OS should clean up on process death. |
 
 ---
