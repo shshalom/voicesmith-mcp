@@ -27,6 +27,7 @@ REGISTRY_SAVE_INTERVAL = 60  # Seconds between periodic registry saves
 DEFAULT_HTTP_PORT = 7865     # HTTP listener port for push-to-talk
 SESSIONS_FILE_NAME = "sessions.json"
 AUDIO_LOCK_PATH = "/tmp/agent-voice-audio.lock"
+WAKE_MIC_LOCK_PATH = "/tmp/agent-voice-wake-mic.lock"
 READY_SOUND = "/System/Library/Sounds/Tink.aiff"
 WAKE_WORD_FRAME_SIZE = 1280  # openWakeWord frame size (80ms at 16kHz)
 DEFAULT_WAKE_THRESHOLD = 0.5 # Wake word detection confidence threshold

@@ -7,6 +7,7 @@ transcribes with Whisper, and injects the text into the target IDE session
 via tmux send-keys.
 """
 
+import fcntl
 import os
 import platform
 import queue
@@ -27,6 +28,7 @@ from shared import (
     DEFAULT_NO_SPEECH_TIMEOUT,
     READY_SOUND,
     SESSIONS_FILE_NAME,
+    WAKE_MIC_LOCK_PATH,
     get_logger,
 )
 
@@ -69,6 +71,7 @@ class WakeWordListener:
         self._yield_event = threading.Event()
         self._yield_done = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._mic_lock_file = None
 
         # Load openWakeWord model
         self._wake_model = None
@@ -139,6 +142,14 @@ class WakeWordListener:
         if self._thread is not None:
             self._thread.join(timeout=5)
             self._thread = None
+        # Release mic lock if held
+        if self._mic_lock_file is not None:
+            try:
+                fcntl.flock(self._mic_lock_file, fcntl.LOCK_UN)
+                self._mic_lock_file.close()
+            except Exception:
+                pass
+            self._mic_lock_file = None
         logger.info("Wake word listener stopped")
 
     def yield_mic(self):
@@ -167,6 +178,19 @@ class WakeWordListener:
     def _listen_loop(self):
         """Main loop: continuously listen for the wake word."""
         import sounddevice as sd
+
+        # Acquire cross-session mic lock — only one session can run the wake listener
+        # Uses non-blocking flock: if another session holds it, skip wake listening
+        try:
+            self._mic_lock_file = open(WAKE_MIC_LOCK_PATH, "w")
+            fcntl.flock(self._mic_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            logger.info("Acquired wake word mic lock")
+        except (IOError, OSError):
+            logger.info("Another session owns the wake word mic — skipping wake listener")
+            self._mic_lock_file = None
+            with self._state_lock:
+                self._state = WakeState.DISABLED
+            return
 
         with self._state_lock:
             self._state = WakeState.LISTENING
@@ -234,6 +258,16 @@ class WakeWordListener:
                     stream.close()
                 except Exception:
                     pass
+
+        # Release mic lock
+        if self._mic_lock_file is not None:
+            try:
+                fcntl.flock(self._mic_lock_file, fcntl.LOCK_UN)
+                self._mic_lock_file.close()
+                logger.info("Released wake word mic lock")
+            except Exception:
+                pass
+            self._mic_lock_file = None
 
         with self._state_lock:
             self._state = WakeState.DISABLED
