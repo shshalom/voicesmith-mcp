@@ -61,6 +61,9 @@
 | 23 | 🔴 | Stale sessions not cleaned up on crash | PID check works but only runs on next startup. Could add periodic cleanup. |
 | 24 | 🟢 | tmux_session always null without alias | Fixed — alias sets AGENT_VOICE_TMUX env var |
 | 25 | 🔴 | Wake listener doesn't release mic cleanly when MCP server crashes | flock handles it, but sounddevice stream may leak. OS should clean up on process death. |
+| 26 | 🔴 | No audio cue when AI is listening (speak_then_listen) | Play Tink sound when mic opens for AI-initiated listen, so user knows to speak. Currently only wake word plays Tink. |
+| 27 | 🔴 | Low mic sensitivity / difficulty hearing user | Listen frequently times out. May need: longer timeout, lower VAD threshold, or mic gain adjustment. Investigate root cause. |
+| 28 | 🔴 | tmux may intercept Shift+Return (newline) | Verify if tmux passes Shift+Return through to Claude Code correctly. If not, add tmux.conf key binding passthrough. |
 
 ---
 
@@ -68,21 +71,21 @@
 
 | # | Status | Feature | Notes |
 |---|--------|---------|-------|
-| 26 | ⚪ | Custom wake word training CLI | `npx agent-voice-mcp train-wake-word "Hey Nova"` — uses Colab or local training |
-| 27 | ⚪ | GUI editor support (Cursor, VS Code) | Needs InputMethodKit, sendkeys, or editor extension for text injection |
-| 28 | ⚪ | README.md | User-facing documentation |
-| 29 | ⚪ | LICENSE file | Apache 2.0 |
-| 30 | ⚪ | Publish to npm | package.json ready, needs npm account |
-| 31 | ⚪ | GitHub Actions CI | macOS runner, mocked tests (no models) |
-| 32 | ⚪ | Streaming TTS playback | Play chunk 1 while synthesizing chunk 2 |
-| 33 | ⚪ | Linux ready sound fallback | Bundled WAV + aplay/paplay |
-| 34 | ⚪ | Conversation logging | Record all agent speech to transcript |
-| 35 | ⚪ | Larger Whisper models | Optional medium/large for higher accuracy |
-| 36 | ⚪ | Visual wake indicator | Menu bar / notification when wake listener activates |
-| 37 | ⚪ | "Hey listen, all" broadcast | Send to all sessions simultaneously |
-| 38 | ⚪ | Windows support | tmux alternative, different audio stack |
-| 39 | ⚪ | Wake word sensitivity tuning | Per-environment threshold (noisy vs quiet) |
-| 40 | ⚪ | Periodic stale session cleanup | Background thread that cleans sessions.json every N seconds |
+| 29 | ⚪ | Custom wake word training CLI | `npx agent-voice-mcp train-wake-word "Hey Nova"` — uses Colab or local training |
+| 30 | ⚪ | GUI editor support (Cursor, VS Code) | Needs InputMethodKit, sendkeys, or editor extension for text injection |
+| 31 | ⚪ | README.md | User-facing documentation |
+| 32 | ⚪ | LICENSE file | Apache 2.0 |
+| 33 | ⚪ | Publish to npm | package.json ready, needs npm account |
+| 34 | ⚪ | GitHub Actions CI | macOS runner, mocked tests (no models) |
+| 35 | ⚪ | Streaming TTS playback | Play chunk 1 while synthesizing chunk 2 |
+| 36 | ⚪ | Linux ready sound fallback | Bundled WAV + aplay/paplay |
+| 37 | ⚪ | Conversation logging | Record all agent speech to transcript |
+| 38 | ⚪ | Larger Whisper models | Optional medium/large for higher accuracy |
+| 39 | ⚪ | Visual wake indicator | Menu bar / notification when wake listener activates |
+| 40 | ⚪ | "Hey listen, all" broadcast | Send to all sessions simultaneously |
+| 41 | ⚪ | Windows support | tmux alternative, different audio stack |
+| 42 | ⚪ | Wake word sensitivity tuning | Per-environment threshold (noisy vs quiet) |
+| 43 | ⚪ | Periodic stale session cleanup | Background thread that cleans sessions.json every N seconds |
 
 ---
 
