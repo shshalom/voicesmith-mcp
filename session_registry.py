@@ -103,6 +103,7 @@ def register_session(
     preferred_name: str,
     preferred_voice: str,
     base_port: int = DEFAULT_HTTP_PORT,
+    tmux_session: Optional[str] = None,
 ) -> dict:
     """Register this server as an active session.
 
@@ -135,11 +136,16 @@ def register_session(
 
         port = _find_available_port(sessions, base_port)
 
+        # Read tmux session from env if not provided
+        if tmux_session is None:
+            tmux_session = os.environ.get("AGENT_VOICE_TMUX")
+
         session = {
             "name": name,
             "voice": voice,
             "port": port,
             "pid": os.getpid(),
+            "tmux_session": tmux_session,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
         sessions.append(session)

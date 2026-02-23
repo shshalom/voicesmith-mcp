@@ -28,6 +28,10 @@ DEFAULT_HTTP_PORT = 7865     # HTTP listener port for push-to-talk
 SESSIONS_FILE_NAME = "sessions.json"
 AUDIO_LOCK_PATH = "/tmp/agent-voice-audio.lock"
 READY_SOUND = "/System/Library/Sounds/Tink.aiff"
+WAKE_WORD_FRAME_SIZE = 1280  # openWakeWord frame size (80ms at 16kHz)
+DEFAULT_WAKE_THRESHOLD = 0.5 # Wake word detection confidence threshold
+DEFAULT_RECORDING_TIMEOUT = 10  # Max seconds to record after wake word
+DEFAULT_NO_SPEECH_TIMEOUT = 5   # Seconds of no speech after wake before abort
 
 
 # ─── Voice Catalog ────────────────────────────────────────────────────────────

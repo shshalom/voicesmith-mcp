@@ -37,9 +37,20 @@ class STTConfig:
 
 
 @dataclass
+class WakeWordConfig:
+    enabled: bool = False
+    model: str = "hey_listen"
+    threshold: float = 0.5
+    ready_sound: str = "tink"
+    recording_timeout: float = 10
+    no_speech_timeout: float = 5
+
+
+@dataclass
 class AppConfig:
     tts: TTSConfig = field(default_factory=TTSConfig)
     stt: STTConfig = field(default_factory=STTConfig)
+    wake_word: WakeWordConfig = field(default_factory=WakeWordConfig)
     main_agent: str = "Eric"
     voice_registry: dict[str, str] = field(default_factory=dict)
     log_level: str = "info"
@@ -111,6 +122,22 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
             if "http_port" in data:
                 config.http_port = int(data["http_port"])
 
+            # Wake word config
+            if "wake_word" in data:
+                ww = data["wake_word"]
+                if "enabled" in ww:
+                    config.wake_word.enabled = bool(ww["enabled"])
+                if "model" in ww:
+                    config.wake_word.model = ww["model"]
+                if "threshold" in ww:
+                    config.wake_word.threshold = float(ww["threshold"])
+                if "ready_sound" in ww:
+                    config.wake_word.ready_sound = ww["ready_sound"]
+                if "recording_timeout" in ww:
+                    config.wake_word.recording_timeout = float(ww["recording_timeout"])
+                if "no_speech_timeout" in ww:
+                    config.wake_word.no_speech_timeout = float(ww["no_speech_timeout"])
+
             logger.debug(f"Loaded config from {path}")
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"Error reading config from {path}: {e}. Using defaults.")
@@ -128,6 +155,8 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         config.tts.default_voice = env_default
     if env_port := os.environ.get("VOICE_HTTP_PORT"):
         config.http_port = int(env_port)
+    if env_wake := os.environ.get("VOICE_WAKE_ENABLED"):
+        config.wake_word.enabled = env_wake.lower() in ("true", "1", "yes")
 
     return config
 
@@ -156,6 +185,14 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
         "log_level": config.log_level,
         "log_file": config.log_file,
         "http_port": config.http_port,
+        "wake_word": {
+            "enabled": config.wake_word.enabled,
+            "model": config.wake_word.model,
+            "threshold": config.wake_word.threshold,
+            "ready_sound": config.wake_word.ready_sound,
+            "recording_timeout": config.wake_word.recording_timeout,
+            "no_speech_timeout": config.wake_word.no_speech_timeout,
+        },
     }
 
     with open(path, "w") as f:

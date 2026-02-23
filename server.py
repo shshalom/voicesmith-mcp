@@ -11,6 +11,7 @@ Usage:
 
 import asyncio
 import json
+import os
 import signal
 import sys
 import threading
@@ -62,6 +63,7 @@ _listen_active = False
 _startup_time = time.time()
 _session_info: dict = None
 _event_loop: asyncio.AbstractEventLoop = None
+_wake_listener = None
 
 
 # ─── Startup / Shutdown ──────────────────────────────────────────────────────
@@ -122,6 +124,40 @@ def _init_registry(config: AppConfig):
         default_voice=config.tts.default_voice,
     )
     logger.info(f"Voice registry initialized ({_registry.size} entries)")
+
+
+def _init_wake(config: AppConfig):
+    """Initialize wake word listener if enabled."""
+    global _wake_listener
+
+    if not config.wake_word.enabled:
+        logger.info("Wake word listener disabled")
+        return
+
+    if _stt_engine is None or _vad is None:
+        logger.warning("Cannot start wake listener: STT or VAD not loaded")
+        return
+
+    try:
+        from wake_listener import WakeWordListener
+
+        tmux_session = os.environ.get("AGENT_VOICE_TMUX")
+        _wake_listener = WakeWordListener(
+            stt_engine=_stt_engine,
+            vad=_vad,
+            wake_model_name=config.wake_word.model,
+            threshold=config.wake_word.threshold,
+            tmux_session=tmux_session,
+            ready_sound=config.wake_word.ready_sound,
+            recording_timeout=config.wake_word.recording_timeout,
+            no_speech_timeout=config.wake_word.no_speech_timeout,
+        )
+        _wake_listener.start()
+        logger.info("Wake word listener initialized and started")
+    except ImportError:
+        logger.info("openWakeWord not installed — wake word feature unavailable")
+    except Exception as e:
+        logger.warning(f"Failed to initialize wake listener: {e}")
 
 
 # ─── HTTP Listener (Push-to-Talk) ─────────────────────────────────────────────
@@ -209,6 +245,12 @@ def _shutdown():
         except Exception as e:
             logger.error(f"Failed to save registry on shutdown: {e}")
 
+    if _wake_listener is not None:
+        try:
+            _wake_listener.stop()
+        except Exception as e:
+            logger.error(f"Failed to stop wake listener: {e}")
+
     try:
         unregister_session()
     except Exception as e:
@@ -286,6 +328,10 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
     if _listen_active:
         return {"success": False, "error": "mic_busy", "message": "Another listen call is in progress"}
 
+    # Yield mic from wake listener if active
+    if _wake_listener is not None and _wake_listener.is_listening:
+        _wake_listener.yield_mic()
+
     _listen_active = True
     _listen_cancel_event = asyncio.Event()
 
@@ -332,6 +378,9 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
     finally:
         _listen_active = False
         _listen_cancel_event = None
+        # Reclaim mic for wake listener
+        if _wake_listener is not None:
+            _wake_listener.reclaim_mic()
 
 
 @mcp.tool()
@@ -451,6 +500,34 @@ async def unmute_tool() -> dict:
 
 
 @mcp.tool()
+async def wake_enable() -> dict:
+    """Start the wake word listener for user-initiated voice input."""
+    global _wake_listener
+    if _wake_listener is not None and _wake_listener.is_listening:
+        return {"success": True, "already_listening": True}
+
+    if _wake_listener is None:
+        # Try to initialize
+        _init_wake(_config)
+
+    if _wake_listener is not None:
+        _wake_listener.start()
+        return {"success": True, "wake_word": _config.wake_word.model, "listening": True}
+
+    return {"success": False, "error": "wake_unavailable",
+            "message": "openWakeWord not installed. Install with: --with-voice-wake"}
+
+
+@mcp.tool()
+async def wake_disable() -> dict:
+    """Stop the wake word listener and release the microphone."""
+    if _wake_listener is not None:
+        _wake_listener.stop()
+        return {"success": True, "listening": False}
+    return {"success": True, "listening": False, "was_disabled": True}
+
+
+@mcp.tool()
 async def status() -> dict:
     """Report server health and component status."""
     uptime_s = round(time.time() - _startup_time)
@@ -474,6 +551,13 @@ async def status() -> dict:
         "registry_size": _registry.size if _registry else 0,
         "queue_depth": _speech_queue.depth if _speech_queue else 0,
         "session": _session_info,
+        "wake_word": {
+            "enabled": _config.wake_word.enabled if _config else False,
+            "listening": _wake_listener.is_listening if _wake_listener else False,
+            "state": _wake_listener.state if _wake_listener else "disabled",
+            "model": _config.wake_word.model if _config else None,
+            "tmux_session": _session_info.get("tmux_session") if _session_info else None,
+        },
     }
     return result
 
@@ -560,6 +644,7 @@ def main():
     _init_tts(_config)
     _init_stt(_config)
     _init_registry(_config)
+    _init_wake(_config)
 
     # Check if at least one engine loaded
     tts_ok = _tts_engine is not None and _tts_engine.is_loaded()

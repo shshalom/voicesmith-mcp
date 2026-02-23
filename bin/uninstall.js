@@ -124,11 +124,44 @@ async function run() {
     logOk("Removed voice-rules.md template");
   }
 
+  // Remove wake word source line from shell profiles
+  const os = require("os");
+  const path = require("path");
+  for (const profile of [
+    path.join(os.homedir(), ".zshrc"),
+    path.join(os.homedir(), ".bashrc"),
+  ]) {
+    if (fileExists(profile)) {
+      const content = fs.readFileSync(profile, "utf8");
+      if (content.includes("agent-voice-mcp")) {
+        const cleaned = content
+          .split("\n")
+          .filter((line) => !line.includes("agent-voice-mcp"))
+          .join("\n");
+        fs.writeFileSync(profile, cleaned);
+        logOk(`Removed source line from ${profile}`);
+      }
+    }
+  }
+
+  // Kill lingering tmux sessions
+  try {
+    const { execSync } = require("child_process");
+    const sessions = execSync("tmux list-sessions -F '#{session_name}' 2>/dev/null", {
+      encoding: "utf8",
+    }).trim();
+    for (const session of sessions.split("\n")) {
+      if (session.startsWith("agent-voice-")) {
+        execSync(`tmux kill-session -t '${session}' 2>/dev/null`);
+        logOk(`Killed tmux session: ${session}`);
+      }
+    }
+  } catch {
+    // tmux not installed or no sessions — fine
+  }
+
   console.log(
     `\n${BOLD}Uninstall complete.${RESET}`
-  );
-  logInfo(
-    "Your ~/.claude/CLAUDE.md was not modified. Remove voice rule references manually if needed."
   );
   console.log("");
 }

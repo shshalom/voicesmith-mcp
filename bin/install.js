@@ -529,11 +529,100 @@ async function step6_voiceRules(configuredIdes) {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
+// ─── Wake Word Setup ─────────────────────────────────────────────────────────
+
+async function setupWakeWord() {
+  logStep("*", "*", "Setting up wake word (--with-voice-wake)...");
+
+  // Check tmux
+  if (await commandExists("tmux")) {
+    logOk("tmux found");
+  } else {
+    logAction("Installing tmux via Homebrew...");
+    const result = await runCommand("brew", ["install", "tmux"]);
+    if (result.success) {
+      logActionDone("tmux installed");
+    } else {
+      logError("Failed to install tmux. Install manually: brew install tmux");
+      return;
+    }
+  }
+
+  // Install openwakeword
+  const check = await runCommand(VENV_PYTHON, ["-c", "import openwakeword"]);
+  if (check.success) {
+    logOk("openwakeword already installed");
+  } else {
+    logAction("Installing openwakeword...");
+    const result = await runCommand(VENV_PIP, ["install", "--quiet", "openwakeword"]);
+    if (result.success) {
+      logActionDone("openwakeword installed");
+    } else {
+      logError("Failed to install openwakeword");
+      return;
+    }
+  }
+
+  // Download wake word models
+  logAction("Downloading wake word models...");
+  await runCommand(VENV_PYTHON, ["-c", "import openwakeword; openwakeword.utils.download_models()"]);
+  logActionDone("Wake word models downloaded");
+
+  // Copy shell scripts to install dir
+  const shellFiles = ["shell-init.sh", "tmux-launcher.sh", "tmux.conf", "wake_listener.py"];
+  for (const file of shellFiles) {
+    const src = path.join(PKG_DIR, file);
+    const dest = path.join(INSTALL_DIR, file);
+    if (fileExists(src)) {
+      fs.copyFileSync(src, dest);
+      if (file.endsWith(".sh")) {
+        fs.chmodSync(dest, 0o755);
+      }
+    }
+  }
+  logOk("Shell scripts and wake listener copied");
+
+  // Enable wake word in config
+  if (fileExists(CONFIG_FILE)) {
+    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    if (!config.wake_word) config.wake_word = {};
+    config.wake_word.enabled = true;
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
+    logOk("Wake word enabled in config");
+  }
+
+  // Add source line to shell profile
+  const shellProfile = _getShellProfile();
+  if (shellProfile) {
+    const profileContent = fileExists(shellProfile) ? fs.readFileSync(shellProfile, "utf8") : "";
+    const sourceLine = `\n# agent-voice-mcp\n[ -f ~/.local/share/agent-voice-mcp/shell-init.sh ] && source ~/.local/share/agent-voice-mcp/shell-init.sh\n`;
+    if (!profileContent.includes("agent-voice-mcp")) {
+      fs.appendFileSync(shellProfile, sourceLine);
+      logOk(`Added source line to ${shellProfile}`);
+    } else {
+      logOk(`Source line already in ${shellProfile}`);
+    }
+  }
+}
+
+function _getShellProfile() {
+  const home = require("os").homedir();
+  const zshrc = path.join(home, ".zshrc");
+  const bashrc = path.join(home, ".bashrc");
+  if (fileExists(zshrc) || process.env.SHELL?.includes("zsh")) return zshrc;
+  if (fileExists(bashrc)) return bashrc;
+  return zshrc; // default
+}
+
+// ─── Main ────────────────────────────────────────────────────────────────────
+
 async function run() {
   logHeader();
 
-  // Parse --claude, --cursor, --codex, --all flags from argv
-  const targetIdes = parseIdeFlags(process.argv.slice(3));
+  // Parse flags from argv
+  const args = process.argv.slice(3);
+  const targetIdes = parseIdeFlags(args);
+  const withVoiceWake = args.includes("--with-voice-wake");
 
   const python = await step1_systemDeps();
   await step2_pythonEnv(python);
@@ -542,14 +631,21 @@ async function run() {
   await step5_microphone();
   await step6_voiceRules(configuredIdes);
 
+  if (withVoiceWake) {
+    await setupWakeWord();
+  }
+
   const ideNames = (configuredIdes || [])
     .map((k) => IDE_CONFIGS[k]?.name || k)
     .join(", ");
 
   console.log(
-    `\n🎉 ${BOLD}Done!${RESET} Configured for: ${ideNames || "Claude Code"}`
+    `\n🎉 ${BOLD}Done!${RESET} Configured for: ${ideNames || "Claude Code"}${withVoiceWake ? " (with voice wake)" : ""}`
   );
   console.log('   Restart your IDE session, then voice tools will be available.');
+  if (withVoiceWake) {
+    console.log('   Open a new terminal for the claude alias to take effect.');
+  }
   console.log('   Run "npx agent-voice-mcp test" to hear a sample voice.\n');
 }
 
