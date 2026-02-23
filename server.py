@@ -740,8 +740,31 @@ def main():
     # Store event loop reference for HTTP→async bridge
     # FastMCP creates the loop internally; we capture it via a startup task
     _start_periodic_save_thread()
+    _start_preheat_intro()
     # Event loop is captured on first MCP tool call via _capture_event_loop()
     mcp.run(transport="stdio")
+
+
+def _start_preheat_intro():
+    """Speak a brief intro after server starts. Preheats TTS engine."""
+    if _tts_engine is None or _audio_player is None:
+        return
+
+    name = _session_info.get("name", "Eric") if _session_info else "Eric"
+    voice = _session_info.get("voice", "am_eric") if _session_info else "am_eric"
+
+    def _intro():
+        # Wait for server to settle
+        time.sleep(1.5)
+        try:
+            result = _tts_engine.synthesize(f"{name} here, ready to go.", voice, 1.0)
+            _audio_player.play(result.samples, result.sample_rate)
+            logger.info(f"Preheat intro spoken: {name}")
+        except Exception as e:
+            logger.warning(f"Preheat intro failed: {e}")
+
+    thread = threading.Thread(target=_intro, daemon=True)
+    thread.start()
 
 
 def _capture_event_loop():
