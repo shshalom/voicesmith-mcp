@@ -182,8 +182,42 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/listen":
             self._handle_listen()
+        elif self.path == "/speak":
+            self._handle_speak()
         else:
             self.send_error(404)
+
+    def _handle_speak(self):
+        """Synthesize and play speech via HTTP. Used by SessionStart hook for preheat intro."""
+        if _event_loop is None:
+            self._json_response(500, {"error": "server_not_ready"})
+            return
+
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+            params = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self._json_response(400, {"error": "invalid_json"})
+            return
+
+        name = params.get("name", _session_info.get("name", "Eric") if _session_info else "Eric")
+        text = params.get("text", "")
+        speed = params.get("speed", 1.0)
+
+        if not text:
+            self._json_response(400, {"error": "missing_text"})
+            return
+
+        future = asyncio.run_coroutine_threadsafe(
+            speak(name, text, speed, block=True),
+            _event_loop,
+        )
+        try:
+            result = future.result(timeout=30)
+            self._json_response(200, result)
+        except Exception as e:
+            self._json_response(500, {"error": "speak_failed", "message": str(e)})
 
     def _handle_listen(self):
         """Record mic → transcribe → return JSON. Bridges to async via the main event loop."""
