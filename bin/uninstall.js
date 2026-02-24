@@ -125,7 +125,8 @@ async function run() {
   }
 
   // Remove SessionStart hook from Claude settings
-  const settingsPath = path.join(require("os").homedir(), ".claude", "settings.json");
+  const os = require("os");
+  const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
   if (fileExists(settingsPath)) {
     try {
       const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
@@ -145,11 +146,10 @@ async function run() {
   }
 
   // Remove wake word source line from shell profiles
-  const os = require("os");
-  const path = require("path");
+  const homeDir = require("os").homedir();
   for (const profile of [
-    path.join(os.homedir(), ".zshrc"),
-    path.join(os.homedir(), ".bashrc"),
+    homeDir + "/.zshrc",
+    homeDir + "/.bashrc",
   ]) {
     if (fileExists(profile)) {
       const content = fs.readFileSync(profile, "utf8");
