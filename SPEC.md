@@ -87,7 +87,7 @@ Server logs to **stderr** (MCP convention — stdout is reserved for the protoco
 
 5. **Voice state: tool presence = voice on** — When the MCP server is running, voice tools are available and the AI uses them. When the server is not running, the tools don't exist and the AI falls back to text. No on/off flag to manage. Additionally, `mute`/`unmute` tools allow temporarily silencing audio without stopping the server.
 
-6. **Voice Activity Detection (VAD)** — The `listen` tool uses Silero VAD (2MB ONNX model, runs on ONNX Runtime — no PyTorch dependency) to detect when the user stops speaking. After 1.5 seconds of silence, recording stops and transcription begins. No manual "stop" action needed. The VAD requires a 64-sample context window prepended to each 512-sample chunk for accurate detection.
+6. **Voice Activity Detection (VAD)** — The `listen` tool uses Silero VAD (2MB ONNX model, runs on ONNX Runtime — no PyTorch dependency) to detect when the user stops speaking. After 1.5 seconds of silence, recording stops and transcription begins. No manual "stop" action needed. The VAD requires a 64-sample context window prepended to each 512-sample chunk for accurate detection. The speech detection threshold is configurable via `stt.vad_threshold` in config.json (default: 0.3 — lowered from 0.5 for better sensitivity to softer speech).
 
 7. **Temp file auto-cleanup** — Audio files are generated to a temp path, played, and immediately deleted. No accumulation.
 
@@ -133,6 +133,19 @@ Synthesize and play speech for a named agent.
 ```
 
 `auto_assigned` is `true` when the server assigned a new voice for a previously unknown agent name.
+
+**Returns (name occupied):** When the AI uses the preferred voice name (configured `main_agent` or `last_voice_name`) but this session was assigned a different name because another session already claimed it:
+```json
+{
+  "success": false,
+  "error": "name_occupied",
+  "message": "'Eric' is occupied by another session. This session is 'Adam'. Use name='Adam' instead.",
+  "session_name": "Adam",
+  "session_voice": "am_adam"
+}
+```
+
+The AI should inform the user and show available voices via `get_voice_registry` — never silently fall back to a different voice.
 
 **Text handling:** Plain text only — no SSML or markup supported. For long text (>500 characters), the server **auto-chunks** by sentence (splits on `.` `!` `?`), synthesizes each chunk, and plays them sequentially with no gap. No hard rejection or length limit — just auto-chunking. This also enables future streaming playback (play chunk 1 while synthesizing chunk 2).
 
@@ -253,13 +266,23 @@ Convenience tool that speaks a question and immediately listens for the answer i
 | `timeout` | number | No | Max seconds to wait for response. Default: 15 |
 | `silence_threshold` | number | No | Seconds of silence before stopping. Default: 1.5 |
 
-**Returns:**
+**Returns (success):**
 ```json
 {
   "speak": { "success": true, "voice": "am_eric", "duration_ms": 1200 },
   "listen": { "success": true, "text": "Go with REST", "confidence": 0.96 }
 }
 ```
+
+**Returns (timeout — no speech detected):** When the user doesn't respond within the timeout, the tool automatically speaks a nudge ("I didn't catch that. Go ahead and type it.") and returns:
+```json
+{
+  "speak": { "success": true, "voice": "am_eric", "duration_ms": 1200 },
+  "listen": { "success": false, "error": "timeout", "message": "No speech detected within timeout", "nudge_spoken": true }
+}
+```
+
+The AI should then wait for typed input — never retry `listen`.
 
 ### Diagnostic Tools
 
@@ -278,7 +301,13 @@ Report server health and component status. Always available, even if TTS or STT 
   "muted": false,
   "uptime_s": 3600,
   "registry_size": 3,
-  "queue_depth": 0
+  "queue_depth": 0,
+  "session": {
+    "name": "Eric",
+    "voice": "am_eric",
+    "port": 7865,
+    "pid": 12345
+  }
 }
 ```
 
@@ -309,15 +338,16 @@ This is a **blocking** tool call — the AI waits while the user speaks, then re
 ```
 
 **Behavior:**
-1. Mic activates (user sees 🎙️ indicator)
-2. Silero VAD monitors for speech
-3. User speaks naturally
-4. VAD detects 1.5s of silence → recording stops
-5. faster-whisper transcribes the audio (~0.2s)
-6. Text returned to AI as tool result
-7. If timeout reached with no speech → returns `{ "success": false, "error": "timeout" }`
-8. If cancelled via MCP cancellation notification or `stop` tool → returns `{ "success": false, "cancelled": true }`
-9. If muted → returns immediately: `{ "success": false, "error": "muted", "message": "Voice input is muted" }`
+1. **Tink ready sound plays** — a short audio cue (macOS system sound) so the user knows to start speaking. Skipped when called from push-to-talk HTTP endpoint (which has its own beep).
+2. Mic activates
+3. Silero VAD monitors for speech
+4. User speaks naturally
+5. VAD detects 1.5s of silence → recording stops
+6. faster-whisper transcribes the audio (~0.2s)
+7. Text returned to AI as tool result
+8. If timeout reached with no speech → returns `{ "success": false, "error": "timeout" }`
+9. If cancelled via MCP cancellation notification or `stop` tool → returns `{ "success": false, "cancelled": true }`
+10. If muted → returns immediately: `{ "success": false, "error": "muted", "message": "Voice input is muted" }`
 
 **Cancellation:** The server is a stdio subprocess with no TTY access — it cannot detect keystrokes directly. Cancellation is handled through two mechanisms:
 1. **MCP protocol cancellation** — The client sends a `notifications/cancelled` message for the in-progress `listen` request. The server respects this and stops recording immediately.
@@ -512,14 +542,21 @@ The `config.json` in the project repo root is the **default template** copied du
     "model_size": "base",
     "language": "en",
     "silence_threshold": 1.5,
-    "max_listen_timeout": 15
+    "max_listen_timeout": 15,
+    "vad_threshold": 0.3
   },
   "main_agent": "Eric",
+  "last_voice_name": null,
   "voice_registry": {},
   "log_level": "info",
-  "log_file": false
+  "log_file": false,
+  "http_port": 7865
 }
 ```
+
+The `last_voice_name` tracks the user's last voice switch via `set_voice`. When set, the server uses it as the preferred name on next startup instead of `main_agent`. This enables voice persistence across session restarts/resumes. Set to `null` to always use `main_agent`.
+
+The `http_port` configures the base port for the HTTP listener (used for push-to-talk and session health checks). Each concurrent session claims the next available port starting from this base.
 
 The `voice_registry` is **optional** — it starts empty by default. Voices are auto-assigned as agents speak. Users can pre-populate it to persist specific assignments across sessions, or to pin favorite voices to agent names.
 
@@ -535,6 +572,7 @@ The `main_agent` field identifies which agent name is the primary/lead agent. Th
 | `WHISPER_MODEL` | faster-whisper model size | `base` |
 | `VOICE_PLAYER` | Audio player command | `mpv` |
 | `VOICE_DEFAULT` | Default voice ID | `am_eric` |
+| `VOICE_HTTP_PORT` | HTTP listener base port | `7865` |
 
 ---
 
@@ -552,7 +590,7 @@ The voice registry is **dynamic**. No pre-configuration is required.
    - Agent "Bella" → `af_bella`
    - Agent "George" → `bm_george`
 
-2. **Hash-based assignment** — If no name match is found, a deterministic hash of the agent name selects from the unassigned voice pool. This ensures the same agent name always gets the same voice, even across restarts (if not pre-configured).
+2. **Priority-ordered assignment** — If no name match is found, the server picks from a priority-ordered list: American English voices first (male, then female), then British English, then all other languages. This ensures fallback voices are always English-speaking. Within the voice registry (for sub-agents), a hash-based assignment from the unassigned pool is used for deterministic selection.
 
 3. **Override anytime** — Users or agents can call `set_voice` to change any assignment.
 
@@ -604,11 +642,12 @@ All injected blocks are marked with `<!-- installed by voicesmith-mcp -->` for i
 The rules are personalized with the chosen main agent name and teach the AI:
 
 1. **Voice identity** — "You are **Eric**. Always call `speak` with `name: "Eric"`."
-2. **Bookend speaking pattern** — Opening voice (`block: false`) + closing voice (`block: true`, never skip)
-3. **Mandatory voice for questions** — Whenever asking the user a question, MUST speak it aloud using `speak_then_listen` or `speak`
-4. **Sub-agent voice assignment** — Call `get_voice_registry` to see available voices, pick names matching Kokoro voices, never reuse the main agent's name
-5. **Handoff protocol** — Both agents speak on handoffs
-6. **Fallback** — Text-only when tools unavailable, respect muted state
+2. **Voice switching** — If `speak` returns `name_occupied`, tell the user the voice is taken, call `get_voice_registry`, and show available voices. Never silently fall back.
+3. **Bookend speaking pattern** — Opening voice (`block: false`) + closing voice (`block: true`, never skip)
+4. **Mandatory voice for questions** — Whenever asking the user a question, MUST speak it aloud using `speak_then_listen` (not regular `speak`), so the mic opens right after
+5. **Sub-agent voice assignment** — Call `get_voice_registry` to see available voices, pick names matching Kokoro voices, never reuse the main agent's name
+6. **Handoff protocol** — Both agents speak on handoffs
+7. **Fallback** — Text-only when tools unavailable, respect muted state
 
 ### Template
 
@@ -701,6 +740,10 @@ Step 6/6: Setting up voice rules...
 
 **Smart detection:** Re-running the installer shows all green checkmarks — it's fully idempotent. It also detects existing Kokoro model files (e.g., from `~/.local/share/kokoro-tts/models/`) and symlinks them instead of re-downloading.
 
+**Config merge on upgrade:** When `config.json` already exists, the installer merges new default keys without overwriting user values. Nested objects (e.g., `stt`, `tts`) are merged at the sub-key level. This means upgrading picks up new settings (like `vad_threshold`) while preserving your voice choice and other customizations.
+
+**Voice rules update:** The installer uses sentinel-based blocks (`<!-- installed by voicesmith-mcp -->`) to replace voice rules on re-install. Updated rules (e.g., new voice switching behavior) are applied automatically.
+
 ### Other npx commands
 
 ```bash
@@ -731,10 +774,19 @@ Does **not** remove: npm cache (managed by npm).
 ### Alternative: Git clone (for contributors)
 
 ```bash
-git clone https://github.com/<user>/voicesmith-mcp.git
+git clone https://github.com/shshalom/voicesmith-mcp.git
 cd voicesmith-mcp
 ./install.sh
 ```
+
+The shell installer (`install.sh`) has full feature parity with the npx installer:
+- Interactive voice picker (8 preset voices + custom)
+- IDE auto-detection and `--claude`, `--cursor`, `--codex`, `--all` flags
+- Smart package install (only installs missing packages)
+- Venv health validation on re-install
+- Config merge on upgrade
+- Sentinel-based voice rules injection for all IDEs
+- Legacy `~/.claude/mcp.json` cleanup
 
 ### Manual Install (power users)
 
@@ -767,6 +819,7 @@ voicesmith-mcp/
 ├── README.md              # User-facing documentation
 ├── LICENSE                # Apache 2.0
 ├── package.json           # npm package (for npx voicesmith-mcp)
+├── .npmignore             # Excludes tests, pycache, wake word files from npm
 ├── bin/
 │   ├── cli.js             # npx entry point — command router
 │   ├── install.js         # 6-step interactive installer
@@ -775,23 +828,26 @@ voicesmith-mcp/
 │   ├── voices.js          # Browse and preview all voices
 │   ├── config.js          # Re-run voice picker / change settings
 │   └── utils.js           # Shared helpers (Python discovery, IDE configs, logging)
-├── install.sh             # Alternative setup script (for git clone)
+├── hooks/
+│   └── session-start.sh   # SessionStart hook — discovers assigned voice name
+├── install.sh             # Alternative setup script (full parity with npx installer)
 ├── config.json            # Default server configuration
-├── server.py              # MCP server entry point (10 tools via FastMCP)
+├── server.py              # MCP server entry point (11 tools via FastMCP)
 ├── shared.py              # Constants, voice catalog, types, exceptions
 ├── config.py              # Configuration management (load/save with env overrides)
 ├── voice_registry.py      # Auto-discovery voice registry (name matching + hash)
+├── session_registry.py    # Multi-session coordination (sessions.json, stale detection)
 ├── requirements.txt       # Python dependencies
 ├── tts/
 │   ├── __init__.py
 │   ├── kokoro_engine.py   # Kokoro ONNX wrapper (model loading, synthesis)
 │   ├── speech_queue.py    # Sequential speech queue (prevents overlap)
-│   └── audio_player.py    # Audio playback (mpv, afplay, aplay)
+│   └── audio_player.py    # Audio playback (mpv, afplay, aplay) with cross-session flock
 ├── stt/
 │   ├── __init__.py
 │   ├── whisper_engine.py  # faster-whisper wrapper (model loading, transcription)
 │   ├── mic_capture.py     # Microphone recording with sounddevice (blocksize=512)
-│   └── vad.py             # Silero VAD via ONNX Runtime (no PyTorch)
+│   └── vad.py             # Silero VAD via ONNX Runtime (configurable threshold)
 ├── templates/
 │   └── voice-rules.md     # Voice behavior template ({{MAIN_AGENT}} placeholder)
 ├── models/                # Model files (downloaded during install)
@@ -799,10 +855,11 @@ voicesmith-mcp/
 │   └── voices-v1.0.bin
 └── tests/
     ├── conftest.py        # Shared mock fixtures
-    ├── test_tts.py        # 51 TTS tests
-    ├── test_stt.py        # 23 STT tests
-    ├── test_registry.py   # 20 registry tests
-    └── test_server.py     # 26 integration tests
+    ├── test_tts.py        # TTS tests
+    ├── test_stt.py        # STT tests
+    ├── test_registry.py   # Registry tests
+    ├── test_server.py     # Integration tests
+    └── test_wake.py       # Wake word listener tests (132 total)
 ```
 
 ---
@@ -834,9 +891,12 @@ pytest tests/test_tts.py
 | Test file | What it covers |
 |-----------|---------------|
 | `test_tts.py` | Kokoro engine loading, synthesis output format, voice selection, speed control, auto-chunking of long text, temp file cleanup |
-| `test_stt.py` | Whisper engine loading, transcription accuracy, VAD silence detection timing, confidence score computation, timeout behavior |
-| `test_registry.py` | Name matching (exact + case-insensitive), hash-based assignment, pool exhaustion + wrap-around, persistence (save/load config.json), set_voice override |
-| `test_server.py` | MCP tool call routing, speak block/non-block modes, mute/unmute state transitions, concurrent listen rejection, stop cancelling listen, speak_then_listen atomic flow, status tool output, graceful degradation when engines fail |
+| `test_stt.py` | Whisper engine loading, transcription accuracy, VAD silence detection timing (configurable threshold), confidence score computation, timeout behavior |
+| `test_registry.py` | Name matching (exact + case-insensitive), priority-based assignment, pool exhaustion + wrap-around, persistence (save/load config.json), set_voice override |
+| `test_server.py` | MCP tool call routing, speak block/non-block modes, name_occupied error, mute/unmute state transitions, concurrent listen rejection, stop cancelling listen, speak_then_listen atomic flow with timeout nudge, status tool output, graceful degradation when engines fail |
+| `test_wake.py` | Wake word detection, mic handoff, tmux injection, recording timeout |
+
+**Total: 132 tests** (all passing)
 
 ### CI
 
@@ -927,7 +987,17 @@ The server saves the voice registry to config.json and exits cleanly on:
 - **SIGTERM** — Process terminated by the system or IDE
 - **SIGINT** — Ctrl+C during manual testing
 
-All three trigger: stop any active playback/recording → save registry → exit 0.
+All three trigger: stop any active playback/recording → save registry → unregister session → exit 0.
+
+### Stale Session Detection
+
+A periodic background thread (every 60 seconds) cleans up stale sessions from `sessions.json`:
+
+1. **PID check** — If the process is dead, remove the entry immediately.
+2. **HTTP health check** — Ping the session's `/status` endpoint. If it doesn't respond, the server has crashed or is unreachable.
+3. **Activity check** — The `/status` endpoint reports `last_tool_call_age_s` (seconds since the last MCP tool call). If this exceeds 5 minutes, the session is considered orphaned (process alive but no MCP client connected).
+
+Stale sessions are killed with `SIGTERM` and removed from the registry. This prevents zombie processes from blocking voice names and ports indefinitely.
 
 ### Python Discovery (npx installer)
 
