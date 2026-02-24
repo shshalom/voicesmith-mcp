@@ -65,7 +65,7 @@ def _write_sessions(path: Path, sessions: list[dict]) -> None:
 _STALE_ACTIVITY_THRESHOLD = 300  # 5 minutes
 
 
-def _session_healthy(session: dict) -> bool:
+def _session_healthy(session: dict, activity_threshold: int = _STALE_ACTIVITY_THRESHOLD) -> bool:
     """Check if a session is alive and actively used.
 
     Three checks:
@@ -97,7 +97,7 @@ def _session_healthy(session: dict) -> bool:
             # Check activity age — if server hasn't had MCP tool calls
             # in a while, it's orphaned
             age = data.get("last_tool_call_age_s")
-            if age is not None and age > _STALE_ACTIVITY_THRESHOLD:
+            if age is not None and age > activity_threshold:
                 logger.info(
                     f"Session '{session.get('name')}' (pid {pid}) inactive "
                     f"for {age}s — treating as stale"
@@ -117,11 +117,18 @@ def _session_healthy(session: dict) -> bool:
         return False
 
 
-def _clean_stale(sessions: list[dict]) -> list[dict]:
-    """Remove sessions that are dead or unresponsive."""
+def _clean_stale(sessions: list[dict], aggressive: bool = False) -> list[dict]:
+    """Remove sessions that are dead or unresponsive.
+
+    Args:
+        aggressive: If True, use a shorter activity threshold (10s instead of 5min).
+                    Used during startup registration to quickly reclaim names from
+                    orphaned servers that haven't fully shut down yet.
+    """
+    threshold = 10 if aggressive else _STALE_ACTIVITY_THRESHOLD
     alive = []
     for s in sessions:
-        if _session_healthy(s):
+        if _session_healthy(s, activity_threshold=threshold):
             alive.append(s)
         else:
             logger.info(f"Removed stale session: {s.get('name')} (pid {s.get('pid')})")
@@ -214,9 +221,21 @@ def register_session(
         fcntl.flock(f, fcntl.LOCK_EX)
 
         sessions = _read_sessions(path)
-        sessions = _clean_stale(sessions)
+        # Aggressive cleanup on startup — use short activity threshold
+        # to quickly reclaim names from orphaned servers
+        sessions = _clean_stale(sessions, aggressive=True)
 
         taken_names = {s["name"] for s in sessions}
+
+        if preferred_name in taken_names:
+            # Wait briefly and retry — the old server may be shutting down
+            fcntl.flock(f, fcntl.LOCK_UN)
+            time.sleep(2)
+            fcntl.flock(f, fcntl.LOCK_EX)
+            sessions = _read_sessions(path)
+            sessions = _clean_stale(sessions, aggressive=True)
+            _write_sessions(path, sessions)
+            taken_names = {s["name"] for s in sessions}
 
         if preferred_name in taken_names:
             name, voice = _find_available_name(taken_names, preferred_name)
