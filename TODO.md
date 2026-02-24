@@ -1,4 +1,4 @@
-# Agent Voice MCP — TODO / Feature Tracker
+# VoiceSmith MCP — TODO / Feature Tracker
 
 ## Status Legend
 - 🔴 Not started
@@ -59,7 +59,7 @@
 |---|--------|-------|-------|
 | 22 | 🟢 | Multiple sessions competing for mic | Fixed with wake mic flock |
 | 23 | 🟢 | Stale sessions not cleaned up on crash | Fixed — periodic cleanup every 60s via existing save thread calls get_active_sessions() |
-| 24 | 🟢 | tmux_session always null without alias | Fixed — alias sets AGENT_VOICE_TMUX env var |
+| 24 | 🟢 | tmux_session always null without alias | Fixed — alias sets VOICESMITH_TMUX env var |
 | 25 | 🔴 | Wake listener doesn't release mic cleanly when MCP server crashes | flock handles it, but sounddevice stream may leak. OS should clean up on process death. |
 | 26 | 🟢 | No audio cue when AI is listening (speak_then_listen) | Fixed — Tink plays before mic opens in listen(). Skipped for push-to-talk (has its own beep). |
 | 27 | 🟢 | Low mic sensitivity / difficulty hearing user | Fixed — VAD threshold now configurable via config.json (stt.vad_threshold), default lowered from 0.5 to 0.3 |
@@ -71,7 +71,7 @@
 
 | # | Status | Feature | Notes |
 |---|--------|---------|-------|
-| 29 | ⚪ | Custom wake word training CLI | `npx agent-voice-mcp train-wake-word "Hey Nova"` — uses Colab or local training |
+| 29 | ⚪ | Custom wake word training CLI | `npx voicesmith-mcp train-wake-word "Hey Nova"` — uses Colab or local training |
 | 30 | ⚪ | GUI editor support (Cursor, VS Code) | Needs InputMethodKit, sendkeys, or editor extension for text injection |
 | 31 | ⚪ | README.md | User-facing documentation |
 | 32 | ⚪ | LICENSE file | Apache 2.0 |

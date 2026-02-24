@@ -1,9 +1,9 @@
 {
-  "name": "agent-voice-mcp",
+  "name": "voicesmith-mcp",
   "version": "1.0.0",
   "description": "Local AI voice for coding assistants — TTS & STT via MCP. Kokoro ONNX + faster-whisper, fully offline.",
   "bin": {
-    "agent-voice-mcp": "bin/cli.js"
+    "voicesmith-mcp": "bin/cli.js"
   },
   "files": [
     "bin/",
@@ -32,7 +32,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/shshalom/agent-voice-mcp"
+    "url": "https://github.com/shshalom/voicesmith-mcp"
   },
   "engines": {
     "node": ">=16.0.0"

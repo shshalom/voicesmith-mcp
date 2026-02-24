@@ -1,5 +1,5 @@
 /**
- * Agent Voice MCP — Configuration manager.
+ * VoiceSmith MCP — Configuration manager.
  *
  * Re-run voice picker / change settings.
  */
@@ -48,7 +48,7 @@ async function run() {
   console.log(`${BOLD}Configuration${RESET}\n`);
 
   if (!fileExists(CONFIG_FILE)) {
-    logError("config.json not found. Run 'npx agent-voice-mcp install' first.");
+    logError("config.json not found. Run 'npx voicesmith-mcp install' first.");
     process.exit(1);
   }
 

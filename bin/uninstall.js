@@ -1,5 +1,5 @@
 /**
- * Agent Voice MCP — Uninstaller.
+ * VoiceSmith MCP — Uninstaller.
  *
  * Prompts for confirmation, then removes all installed components.
  */
@@ -29,7 +29,7 @@ const {
 
 async function run() {
   logHeader();
-  console.log(`${BOLD}Uninstalling Agent Voice MCP...${RESET}\n`);
+  console.log(`${BOLD}Uninstalling VoiceSmith MCP...${RESET}\n`);
 
   // Detect which IDEs have the entry
   const configuredIdes = [];
@@ -68,11 +68,11 @@ async function run() {
     logInfo("Install directory already absent");
   }
 
-  // Remove agent-voice entry from each IDE config
+  // Remove voicesmith entry from each IDE config
   for (const [key, ide] of Object.entries(IDE_CONFIGS)) {
     if (fileExists(ide.configPath)) {
       if (ide.removeEntry(ide.configPath)) {
-        logOk(`Removed agent-voice from ${ide.name}`);
+        logOk(`Removed voicesmith from ${ide.name}`);
       }
     }
   }
@@ -81,14 +81,14 @@ async function run() {
   if (fileExists(MCP_CONFIG_LEGACY)) {
     try {
       const legacy = JSON.parse(fs.readFileSync(MCP_CONFIG_LEGACY, "utf8"));
-      if (legacy.mcpServers && legacy.mcpServers["agent-voice"]) {
-        delete legacy.mcpServers["agent-voice"];
+      if (legacy.mcpServers && legacy.mcpServers["voicesmith"]) {
+        delete legacy.mcpServers["voicesmith"];
         if (Object.keys(legacy.mcpServers).length === 0) {
           fs.unlinkSync(MCP_CONFIG_LEGACY);
           logOk("Cleaned up legacy ~/.claude/mcp.json");
         } else {
           fs.writeFileSync(MCP_CONFIG_LEGACY, JSON.stringify(legacy, null, 2) + "\n");
-          logOk("Removed agent-voice from legacy ~/.claude/mcp.json");
+          logOk("Removed voicesmith from legacy ~/.claude/mcp.json");
         }
       }
     } catch { /* ignore */ }
@@ -133,10 +133,10 @@ async function run() {
   ]) {
     if (fileExists(profile)) {
       const content = fs.readFileSync(profile, "utf8");
-      if (content.includes("agent-voice-mcp")) {
+      if (content.includes("voicesmith-mcp")) {
         const cleaned = content
           .split("\n")
-          .filter((line) => !line.includes("agent-voice-mcp"))
+          .filter((line) => !line.includes("voicesmith-mcp"))
           .join("\n");
         fs.writeFileSync(profile, cleaned);
         logOk(`Removed source line from ${profile}`);
@@ -151,7 +151,7 @@ async function run() {
       encoding: "utf8",
     }).trim();
     for (const session of sessions.split("\n")) {
-      if (session.startsWith("agent-voice-")) {
+      if (session.startsWith("voicesmith-")) {
         execSync(`tmux kill-session -t '${session}' 2>/dev/null`);
         logOk(`Killed tmux session: ${session}`);
       }

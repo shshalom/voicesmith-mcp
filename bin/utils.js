@@ -1,5 +1,5 @@
 /**
- * Shared utilities for Agent Voice MCP installer CLI.
+ * Shared utilities for VoiceSmith MCP installer CLI.
  */
 
 const { execFile, exec } = require("child_process");
@@ -13,7 +13,7 @@ const execAsync = promisify(exec);
 
 // ─── Paths ───────────────────────────────────────────────────────────────────
 
-const INSTALL_DIR = path.join(os.homedir(), ".local", "share", "agent-voice-mcp");
+const INSTALL_DIR = path.join(os.homedir(), ".local", "share", "voicesmith-mcp");
 const MODEL_DIR = path.join(INSTALL_DIR, "models");
 const VENV_DIR = path.join(INSTALL_DIR, ".venv");
 const VENV_PYTHON = path.join(VENV_DIR, "bin", "python3");
@@ -56,18 +56,18 @@ const IDE_CONFIGS = {
     },
     hasEntry(configPath) {
       const data = this.read(configPath);
-      return !!(data.mcpServers && data.mcpServers["agent-voice"]);
+      return !!(data.mcpServers && data.mcpServers["voicesmith"]);
     },
     addEntry(configPath) {
       const data = this.read(configPath);
       if (!data.mcpServers) data.mcpServers = {};
-      data.mcpServers["agent-voice"] = { command: VENV_PYTHON, args: [SERVER_PY] };
+      data.mcpServers["voicesmith"] = { command: VENV_PYTHON, args: [SERVER_PY] };
       this.write(configPath, data);
     },
     removeEntry(configPath) {
       const data = this.read(configPath);
-      if (data.mcpServers && data.mcpServers["agent-voice"]) {
-        delete data.mcpServers["agent-voice"];
+      if (data.mcpServers && data.mcpServers["voicesmith"]) {
+        delete data.mcpServers["voicesmith"];
         if (Object.keys(data.mcpServers).length === 0) delete data.mcpServers;
         if (Object.keys(data).length === 0) {
           try { fs.unlinkSync(configPath); } catch {}
@@ -95,18 +95,18 @@ const IDE_CONFIGS = {
     },
     hasEntry(configPath) {
       const data = this.read(configPath);
-      return !!(data.mcpServers && data.mcpServers["agent-voice"]);
+      return !!(data.mcpServers && data.mcpServers["voicesmith"]);
     },
     addEntry(configPath) {
       const data = this.read(configPath);
       if (!data.mcpServers) data.mcpServers = {};
-      data.mcpServers["agent-voice"] = { command: VENV_PYTHON, args: [SERVER_PY] };
+      data.mcpServers["voicesmith"] = { command: VENV_PYTHON, args: [SERVER_PY] };
       this.write(configPath, data);
     },
     removeEntry(configPath) {
       const data = this.read(configPath);
-      if (data.mcpServers && data.mcpServers["agent-voice"]) {
-        delete data.mcpServers["agent-voice"];
+      if (data.mcpServers && data.mcpServers["voicesmith"]) {
+        delete data.mcpServers["voicesmith"];
         if (Object.keys(data.mcpServers).length === 0) {
           try { fs.unlinkSync(configPath); } catch {}
         } else {
@@ -134,18 +134,18 @@ const IDE_CONFIGS = {
     },
     hasEntry(configPath) {
       const data = this.read(configPath);
-      return !!(data.mcpServers && data.mcpServers["agent-voice"]);
+      return !!(data.mcpServers && data.mcpServers["voicesmith"]);
     },
     addEntry(configPath) {
       const data = this.read(configPath);
       if (!data.mcpServers) data.mcpServers = {};
-      data.mcpServers["agent-voice"] = { command: VENV_PYTHON, args: [SERVER_PY] };
+      data.mcpServers["voicesmith"] = { command: VENV_PYTHON, args: [SERVER_PY] };
       this.write(configPath, data);
     },
     removeEntry(configPath) {
       const data = this.read(configPath);
-      if (data.mcpServers && data.mcpServers["agent-voice"]) {
-        delete data.mcpServers["agent-voice"];
+      if (data.mcpServers && data.mcpServers["voicesmith"]) {
+        delete data.mcpServers["voicesmith"];
         if (Object.keys(data.mcpServers).length === 0) {
           try { fs.unlinkSync(configPath); } catch {}
         } else {
@@ -216,7 +216,7 @@ function logStep(n, total, msg) {
   console.log(`\n${BOLD}Step ${n}/${total}: ${msg}${RESET}`);
 }
 function logHeader() {
-  console.log(`\n${BOLD}🎙️  Agent Voice MCP — Local AI Voice System${RESET}\n`);
+  console.log(`\n${BOLD}🎙️  VoiceSmith MCP — Local AI Voice System${RESET}\n`);
 }
 
 // ─── Python Discovery ────────────────────────────────────────────────────────
@@ -312,7 +312,7 @@ function findModel(filename) {
 
 // ─── Voice Rules Generation ──────────────────────────────────────────────────
 
-const VOICE_RULES_SENTINEL = "<!-- installed by agent-voice-mcp -->";
+const VOICE_RULES_SENTINEL = "<!-- installed by voicesmith-mcp -->";
 
 function generateVoiceRules(mainAgentName) {
   // Read template and fill in the main agent name
@@ -326,9 +326,9 @@ function generateVoiceRules(mainAgentName) {
     content = content.replace(/\{\{MAIN_AGENT\}\}/g, mainAgentName);
   } else {
     // Fallback inline template
-    content = `# Voice Behavior Rules (Agent Voice MCP)
+    content = `# Voice Behavior Rules (VoiceSmith MCP)
 
-You have access to voice tools via the Agent Voice MCP server.
+You have access to voice tools via the VoiceSmith MCP server.
 
 ## Your Voice
 - You are **${mainAgentName}**. Always call \`speak\` with \`name: "${mainAgentName}"\` — this is your voice.
@@ -367,15 +367,15 @@ You have access to voice tools via the Agent Voice MCP server.
 
 function generateCursorRule(mainAgentName) {
   return `---
-description: Voice interaction rules for Agent Voice MCP server
+description: Voice interaction rules for VoiceSmith MCP server
 globs:
 alwaysApply: true
 ---
 
 ${VOICE_RULES_SENTINEL}
-# Voice Behavior Rules (Agent Voice MCP)
+# Voice Behavior Rules (VoiceSmith MCP)
 
-You have access to voice tools via the Agent Voice MCP server.
+You have access to voice tools via the VoiceSmith MCP server.
 
 ## Your Voice
 - Your default voice name is **${mainAgentName}**, but your actual assigned name may differ if another session claimed it first.
@@ -415,9 +415,9 @@ function generateAppendBlock(mainAgentName) {
   // Block to append to CLAUDE.md or AGENTS.md
   return `
 ${VOICE_RULES_SENTINEL}
-# Voice Behavior Rules (Agent Voice MCP)
+# Voice Behavior Rules (VoiceSmith MCP)
 
-You have access to voice tools via the Agent Voice MCP server.
+You have access to voice tools via the VoiceSmith MCP server.
 
 ## Your Voice
 - Your default voice name is **${mainAgentName}**, but your actual assigned name may differ if another session claimed it first.
@@ -474,7 +474,7 @@ const IDE_RULES = {
     type: "append", // append block to existing file
   },
   cursor: {
-    path: path.join(os.homedir(), ".cursor", "rules", "agent-voice.mdc"),
+    path: path.join(os.homedir(), ".cursor", "rules", "voicesmith.mdc"),
     type: "file", // standalone file
   },
   codex: {

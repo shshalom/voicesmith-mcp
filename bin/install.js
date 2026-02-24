@@ -1,5 +1,5 @@
 /**
- * Agent Voice MCP — Interactive installer (6 steps).
+ * VoiceSmith MCP — Interactive installer (6 steps).
  *
  * Smart detection: checks for existing tools, models, and configs.
  * Only installs/downloads what's actually missing.
@@ -411,8 +411,8 @@ async function step4_mcpConfig(targetIdes) {
   if (fileExists(MCP_CONFIG_LEGACY)) {
     try {
       const legacy = JSON.parse(fs.readFileSync(MCP_CONFIG_LEGACY, "utf8"));
-      if (legacy.mcpServers && legacy.mcpServers["agent-voice"]) {
-        delete legacy.mcpServers["agent-voice"];
+      if (legacy.mcpServers && legacy.mcpServers["voicesmith"]) {
+        delete legacy.mcpServers["voicesmith"];
         if (Object.keys(legacy.mcpServers).length === 0) {
           fs.unlinkSync(MCP_CONFIG_LEGACY);
         } else {
@@ -628,8 +628,8 @@ async function setupWakeWord() {
   const shellProfile = _getShellProfile();
   if (shellProfile) {
     const profileContent = fileExists(shellProfile) ? fs.readFileSync(shellProfile, "utf8") : "";
-    const sourceLine = `\n# agent-voice-mcp\n[ -f ~/.local/share/agent-voice-mcp/shell-init.sh ] && source ~/.local/share/agent-voice-mcp/shell-init.sh\n`;
-    if (!profileContent.includes("agent-voice-mcp")) {
+    const sourceLine = `\n# voicesmith-mcp\n[ -f ~/.local/share/voicesmith-mcp/shell-init.sh ] && source ~/.local/share/voicesmith-mcp/shell-init.sh\n`;
+    if (!profileContent.includes("voicesmith-mcp")) {
       fs.appendFileSync(shellProfile, sourceLine);
       logOk(`Added source line to ${shellProfile}`);
     } else {
@@ -671,7 +671,7 @@ async function run() {
     `\n🎉 ${BOLD}Done!${RESET} Configured for: ${ideNames || "Claude Code"}`
   );
   console.log('   Restart your IDE session, then voice tools will be available.');
-  console.log('   Run "npx agent-voice-mcp test" to hear a sample voice.\n');
+  console.log('   Run "npx voicesmith-mcp test" to hear a sample voice.\n');
 }
 
 module.exports = { run };

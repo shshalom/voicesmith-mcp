@@ -1,9 +1,9 @@
 #!/bin/bash
-# Agent Voice MCP — SessionStart hook (lightweight)
+# VoiceSmith MCP — SessionStart hook (lightweight)
 # Discovers this session's assigned voice name and injects it as context.
 # No TTS calls — just reads sessions.json and returns the name.
 
-SESSIONS_FILE="$HOME/.local/share/agent-voice-mcp/sessions.json"
+SESSIONS_FILE="$HOME/.local/share/voicesmith-mcp/sessions.json"
 INPUT=$(cat)
 
 SESSION_NAME=""
@@ -15,7 +15,7 @@ import json, os
 try:
     with open('$SESSIONS_FILE') as f:
         data = json.load(f)
-    tmux_session = os.environ.get('AGENT_VOICE_TMUX', '')
+    tmux_session = os.environ.get('VOICESMITH_TMUX', '')
     for s in data.get('sessions', []):
         try:
             os.kill(s['pid'], 0)

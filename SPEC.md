@@ -1,4 +1,4 @@
-# Agent Voice MCP Server
+# VoiceSmith MCP Server
 
 A Model Context Protocol (MCP) server that provides local, high-quality text-to-speech **and** speech-to-text capabilities to AI coding assistants. Built on Kokoro ONNX (TTS) and faster-whisper (STT) for fast, fully offline voice interaction — enabling AI agents to speak with distinct voices and listen to user responses during development sessions.
 
@@ -31,7 +31,7 @@ AI Assistant (Claude Code, Cursor, etc.)
     │  MCP tool calls
     ▼
 ┌──────────────────────────────────────────────────────┐
-│              Agent Voice MCP Server                   │
+│              VoiceSmith MCP Server                   │
 │                                                       │
 │  ┌────────────────────┐   ┌────────────────────────┐ │
 │  │   TTS Engine        │   │   STT Engine            │ │
@@ -59,7 +59,7 @@ The server uses **stdio** transport (JSON-RPC over stdin/stdout). This is the st
 
 ### Logging
 
-Server logs to **stderr** (MCP convention — stdout is reserved for the protocol). Optionally logs to `~/.local/share/agent-voice-mcp/server.log` when `"log_file": true` is set in config. Log levels: `debug`, `info`, `warn`, `error` (configurable via `"log_level"` in config, default: `info`).
+Server logs to **stderr** (MCP convention — stdout is reserved for the protocol). Optionally logs to `~/.local/share/voicesmith-mcp/server.log` when `"log_file": true` is set in config. Log levels: `debug`, `info`, `warn`, `error` (configurable via `"log_level"` in config, default: `info`).
 
 ### Platform Support
 
@@ -483,9 +483,9 @@ All use the same server entry format:
 ```json
 {
   "mcpServers": {
-    "agent-voice": {
-      "command": "~/.local/share/agent-voice-mcp/.venv/bin/python3",
-      "args": ["~/.local/share/agent-voice-mcp/server.py"]
+    "voicesmith": {
+      "command": "~/.local/share/voicesmith-mcp/.venv/bin/python3",
+      "args": ["~/.local/share/voicesmith-mcp/server.py"]
     }
   }
 }
@@ -495,15 +495,15 @@ All use the same server entry format:
 
 ### Server Configuration File (`config.json`)
 
-**Runtime location:** `~/.local/share/agent-voice-mcp/config.json` (created during install)
-**Lookup order:** `$AGENT_VOICE_CONFIG` env var → `~/.local/share/agent-voice-mcp/config.json` → built-in defaults
+**Runtime location:** `~/.local/share/voicesmith-mcp/config.json` (created during install)
+**Lookup order:** `$VOICESMITH_CONFIG` env var → `~/.local/share/voicesmith-mcp/config.json` → built-in defaults
 The `config.json` in the project repo root is the **default template** copied during install.
 
 ```json
 {
   "tts": {
-    "model_path": "~/.local/share/agent-voice-mcp/models/kokoro-v1.0.onnx",
-    "voices_path": "~/.local/share/agent-voice-mcp/models/voices-v1.0.bin",
+    "model_path": "~/.local/share/voicesmith-mcp/models/kokoro-v1.0.onnx",
+    "voices_path": "~/.local/share/voicesmith-mcp/models/voices-v1.0.bin",
     "default_voice": "am_eric",
     "default_speed": 1.0,
     "audio_player": "mpv"
@@ -529,9 +529,9 @@ The `main_agent` field identifies which agent name is the primary/lead agent. Th
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `AGENT_VOICE_CONFIG` | Override path to config.json | `~/.local/share/agent-voice-mcp/config.json` |
-| `KOKORO_MODEL` | Path to kokoro-v1.0.onnx model file | `~/.local/share/agent-voice-mcp/models/kokoro-v1.0.onnx` |
-| `KOKORO_VOICES` | Path to voices-v1.0.bin file | `~/.local/share/agent-voice-mcp/models/voices-v1.0.bin` |
+| `VOICESMITH_CONFIG` | Override path to config.json | `~/.local/share/voicesmith-mcp/config.json` |
+| `KOKORO_MODEL` | Path to kokoro-v1.0.onnx model file | `~/.local/share/voicesmith-mcp/models/kokoro-v1.0.onnx` |
+| `KOKORO_VOICES` | Path to voices-v1.0.bin file | `~/.local/share/voicesmith-mcp/models/voices-v1.0.bin` |
 | `WHISPER_MODEL` | faster-whisper model size | `base` |
 | `VOICE_PLAYER` | Audio player command | `mpv` |
 | `VOICE_DEFAULT` | Default voice ID | `am_eric` |
@@ -556,7 +556,7 @@ The voice registry is **dynamic**. No pre-configuration is required.
 
 3. **Override anytime** — Users or agents can call `set_voice` to change any assignment.
 
-### Main Agent Voice
+### Main VoiceSmith
 
 The main agent's voice is **not hardcoded**. Users choose it via:
 - `config.json` → `"default_voice": "am_eric"` (persists across sessions)
@@ -594,10 +594,10 @@ The installer asks the user to pick a main agent voice (e.g., "Eric" → `am_eri
 | IDE | Rules Location | Method |
 |-----|---------------|--------|
 | **Claude Code** | `~/.claude/CLAUDE.md` | Appended block with sentinel comment |
-| **Cursor** | `~/.cursor/rules/agent-voice.mdc` | Standalone MDC file with `alwaysApply: true` |
+| **Cursor** | `~/.cursor/rules/voicesmith.mdc` | Standalone MDC file with `alwaysApply: true` |
 | **Codex (OpenAI)** | `~/.codex/AGENTS.md` | Appended block with sentinel comment |
 
-All injected blocks are marked with `<!-- installed by agent-voice-mcp -->` for idempotent updates and clean uninstall.
+All injected blocks are marked with `<!-- installed by voicesmith-mcp -->` for idempotent updates and clean uninstall.
 
 ### Rules Content
 
@@ -648,11 +648,11 @@ The raw template is at `templates/voice-rules.md` with `{{MAIN_AGENT}}` placehol
 ### Recommended: npx (one command, no cloning)
 
 ```bash
-npx agent-voice-mcp install              # Auto-detect installed IDEs
-npx agent-voice-mcp install --claude     # Claude Code only
-npx agent-voice-mcp install --cursor     # Cursor only
-npx agent-voice-mcp install --codex      # Codex (OpenAI) only
-npx agent-voice-mcp install --all        # All supported IDEs
+npx voicesmith-mcp install              # Auto-detect installed IDEs
+npx voicesmith-mcp install --claude     # Claude Code only
+npx voicesmith-mcp install --cursor     # Cursor only
+npx voicesmith-mcp install --codex      # Codex (OpenAI) only
+npx voicesmith-mcp install --all        # All supported IDEs
 ```
 
 Run from anywhere — no need to clone a repo or navigate to a folder. The installer detects existing tools and models, skips what's already installed, and only downloads/installs what's missing.
@@ -660,7 +660,7 @@ Run from anywhere — no need to clone a repo or navigate to a folder. The insta
 ### What the installer does
 
 ```
-🎙️  Agent Voice MCP — Local AI Voice System
+🎙️  VoiceSmith MCP — Local AI Voice System
 
 Step 1/6: Checking system dependencies...
   ✓ Python 3.12 found
@@ -668,8 +668,8 @@ Step 1/6: Checking system dependencies...
   ✓ mpv found
 
 Step 2/6: Setting up Python environment...
-  ✓ Server files copied to ~/.local/share/agent-voice-mcp
-  ✓ Created venv at ~/.local/share/agent-voice-mcp/.venv
+  ✓ Server files copied to ~/.local/share/voicesmith-mcp
+  ✓ Created venv at ~/.local/share/voicesmith-mcp/.venv
   ✓ All packages installed
 
 Step 3/6: Checking models...
@@ -692,11 +692,11 @@ Step 6/6: Setting up voice rules...
     ...
   ✓ Main agent voice: Eric (am_eric)
   ✓ Claude Code: voice rules added to ~/.claude/CLAUDE.md
-  ✓ Cursor: voice rules written to ~/.cursor/rules/agent-voice.mdc
+  ✓ Cursor: voice rules written to ~/.cursor/rules/voicesmith.mdc
 
 🎉 Done! Configured for: Claude Code, Cursor
    Restart your IDE session, then voice tools will be available.
-   Run "npx agent-voice-mcp test" to hear a sample voice.
+   Run "npx voicesmith-mcp test" to hear a sample voice.
 ```
 
 **Smart detection:** Re-running the installer shows all green checkmarks — it's fully idempotent. It also detects existing Kokoro model files (e.g., from `~/.local/share/kokoro-tts/models/`) and symlinks them instead of re-downloading.
@@ -704,24 +704,24 @@ Step 6/6: Setting up voice rules...
 ### Other npx commands
 
 ```bash
-npx agent-voice-mcp install      # Full interactive setup
-npx agent-voice-mcp test         # Play a sample voice to verify
-npx agent-voice-mcp voices       # Browse and preview all 54 voices
-npx agent-voice-mcp config       # Re-run voice picker / change settings
-npx agent-voice-mcp uninstall    # Remove everything cleanly
+npx voicesmith-mcp install      # Full interactive setup
+npx voicesmith-mcp test         # Play a sample voice to verify
+npx voicesmith-mcp voices       # Browse and preview all 54 voices
+npx voicesmith-mcp config       # Re-run voice picker / change settings
+npx voicesmith-mcp uninstall    # Remove everything cleanly
 ```
 
 ### Uninstall
 
 ```bash
-npx agent-voice-mcp uninstall
+npx voicesmith-mcp uninstall
 ```
 
 Prompts for confirmation, then removes:
-- Python venv at `~/.local/share/agent-voice-mcp/`
-- Models at `~/.local/share/agent-voice-mcp/models/`
-- Config at `~/.local/share/agent-voice-mcp/config.json`
-- Server log at `~/.local/share/agent-voice-mcp/server.log`
+- Python venv at `~/.local/share/voicesmith-mcp/`
+- Models at `~/.local/share/voicesmith-mcp/models/`
+- Config at `~/.local/share/voicesmith-mcp/config.json`
+- Server log at `~/.local/share/voicesmith-mcp/server.log`
 - MCP server entries from all configured IDEs (Claude Code, Cursor, Codex)
 - Voice rules blocks from all IDE instruction files
 - Voice rules template at `~/.claude/agents/voice-rules.md`
@@ -731,8 +731,8 @@ Does **not** remove: npm cache (managed by npm).
 ### Alternative: Git clone (for contributors)
 
 ```bash
-git clone https://github.com/<user>/agent-voice-mcp.git
-cd agent-voice-mcp
+git clone https://github.com/<user>/voicesmith-mcp.git
+cd voicesmith-mcp
 ./install.sh
 ```
 
@@ -762,11 +762,11 @@ python server.py --test
 ## Project Structure
 
 ```
-agent-voice-mcp/
+voicesmith-mcp/
 ├── SPEC.md                # This file
 ├── README.md              # User-facing documentation
 ├── LICENSE                # Apache 2.0
-├── package.json           # npm package (for npx agent-voice-mcp)
+├── package.json           # npm package (for npx voicesmith-mcp)
 ├── bin/
 │   ├── cli.js             # npx entry point — command router
 │   ├── install.js         # 6-step interactive installer
@@ -888,7 +888,7 @@ Real-time factor: 0.12x (generates audio 8x faster than real-time)
 
 ## Comparison with Alternatives
 
-| Feature | Agent Voice MCP | Edge TTS | macOS `say` | OpenAI TTS MCP |
+| Feature | VoiceSmith MCP | Edge TTS | macOS `say` | OpenAI TTS MCP |
 |---------|----------------|----------|-------------|----------------|
 | Runs locally | Yes | No (cloud) | Yes | No (cloud) |
 | TTS latency | <1s | 15-20s | Instant | 1-3s |
@@ -935,7 +935,7 @@ The `cli.js` npm entry point locates a compatible Python in this order:
 
 1. `python3.12` → `python3.11` → `python3` → `python`
 2. Validates version with `--version` (requires 3.11+)
-3. Checks for existing venv at `~/.local/share/agent-voice-mcp/`
+3. Checks for existing venv at `~/.local/share/voicesmith-mcp/`
 4. If no compatible Python found → shows clear error: "Python 3.11+ required. Install with: brew install python@3.12"
 
 ---

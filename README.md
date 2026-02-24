@@ -13,7 +13,7 @@ Local AI voice for coding assistants. Gives your AI a real voice (text-to-speech
 ## Quick Start
 
 ```bash
-npx agent-voice-mcp install
+npx voicesmith-mcp install
 ```
 
 The installer will:
@@ -31,8 +31,8 @@ Restart your IDE session after installing. The AI will greet you by voice on the
 If you don't have Node.js or prefer a shell script:
 
 ```bash
-git clone https://github.com/shshalom/agent-voice-mcp.git
-cd agent-voice-mcp
+git clone https://github.com/shshalom/voicesmith-mcp.git
+cd voicesmith-mcp
 ./install.sh
 ```
 
@@ -69,7 +69,7 @@ Multiple IDE sessions can run simultaneously. Each gets a unique voice name and 
 
 ## Configuration
 
-Config lives at `~/.local/share/agent-voice-mcp/config.json`. Key settings:
+Config lives at `~/.local/share/voicesmith-mcp/config.json`. Key settings:
 
 ```json
 {
@@ -86,7 +86,7 @@ Config lives at `~/.local/share/agent-voice-mcp/config.json`. Key settings:
 }
 ```
 
-Re-run `npx agent-voice-mcp install` to change your voice or update settings. Existing configuration is preserved — only new defaults are added.
+Re-run `npx voicesmith-mcp install` to change your voice or update settings. Existing configuration is preserved — only new defaults are added.
 
 ## Requirements
 
@@ -101,13 +101,13 @@ Re-run `npx agent-voice-mcp install` to change your voice or update settings. Ex
 | IDE | Config Location | Rules Location |
 |-----|----------------|----------------|
 | Claude Code | `~/.claude.json` | `~/.claude/CLAUDE.md` |
-| Cursor | `~/.cursor/mcp.json` | `~/.cursor/rules/agent-voice.mdc` |
+| Cursor | `~/.cursor/mcp.json` | `~/.cursor/rules/voicesmith.mdc` |
 | Codex | `~/.codex/mcp.json` | `~/.codex/AGENTS.md` |
 
 ## Uninstall
 
 ```bash
-npx agent-voice-mcp uninstall
+npx voicesmith-mcp uninstall
 ```
 
 Removes all files, models, MCP config entries, and voice rules cleanly.

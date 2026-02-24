@@ -47,7 +47,7 @@ logger = get_logger("server")
 
 # ─── Global State ─────────────────────────────────────────────────────────────
 
-mcp = FastMCP("agent-voice")
+mcp = FastMCP("voicesmith")
 
 # Engine instances (initialized at startup)
 _tts_engine = None

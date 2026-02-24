@@ -2,7 +2,7 @@
 
 ## Context
 
-The Agent Voice MCP Server (SPEC.md) provides TTS and STT via MCP tools. Currently, the `listen` tool only activates when the AI calls it. This spec adds:
+The VoiceSmith MCP Server (SPEC.md) provides TTS and STT via MCP tools. Currently, the `listen` tool only activates when the AI calls it. This spec adds:
 
 1. **User-initiated voice input (push-to-talk)** — The user says a universal wake phrase via macOS Voice Control. Their speech is transcribed, the target session is identified by name, and the text is submitted to the IDE.
 2. **Multi-session support** — Multiple IDE sessions can run concurrently, each with a unique voice/name, without collisions.
@@ -89,7 +89,7 @@ A lightweight HTTP server runs in a **daemon thread** alongside the stdio MCP tr
 
 #### 2. `voice-input.sh` — Shell Script
 
-Installed to `~/.local/share/agent-voice-mcp/voice-input.sh` (executable).
+Installed to `~/.local/share/voicesmith-mcp/voice-input.sh` (executable).
 
 ```bash
 #!/bin/bash
@@ -101,7 +101,7 @@ Installed to `~/.local/share/agent-voice-mcp/voice-input.sh` (executable).
 # 4. Parse the first word as session name (if multiple sessions)
 # 5. Use osascript to type text into the frontmost app and press Enter
 
-SESSIONS_FILE="$HOME/.local/share/agent-voice-mcp/sessions.json"
+SESSIONS_FILE="$HOME/.local/share/voicesmith-mcp/sessions.json"
 
 # ... check sessions, pick port, curl /listen, parse response ...
 # ... osascript keystroke + return ...
@@ -124,7 +124,7 @@ SESSIONS_FILE="$HOME/.local/share/agent-voice-mcp/sessions.json"
 | Mic busy (AI already listening) | macOS notification: "Mic is busy — the AI is already listening" |
 | Transcription error | macOS notification with error message |
 
-**macOS notifications** via `osascript -e 'display notification "..." with title "Agent Voice"'`
+**macOS notifications** via `osascript -e 'display notification "..." with title "VoiceSmith"'`
 
 **Text injection** via AppleScript:
 ```applescript
@@ -142,7 +142,7 @@ end tell
 
 The installer:
 1. Generates a `.voicecontrolcommands` plist file with the "Hey listen" phrase configured to run the Automator workflow
-2. Creates the Automator workflow (`.workflow`) at `~/.local/share/agent-voice-mcp/VoiceInput.workflow` that runs `voice-input.sh`
+2. Creates the Automator workflow (`.workflow`) at `~/.local/share/voicesmith-mcp/VoiceInput.workflow` that runs `voice-input.sh`
 3. Opens System Settings → Accessibility → Voice Control for the user to import the commands file
 4. Displays clear instructions for the one manual step (clicking Import)
 
@@ -169,7 +169,7 @@ Multiple IDE sessions may run simultaneously (e.g., two Claude Code terminals, o
 
 ### Solution: Session Registry
 
-A shared JSON file at `~/.local/share/agent-voice-mcp/sessions.json` tracks active sessions:
+A shared JSON file at `~/.local/share/voicesmith-mcp/sessions.json` tracks active sessions:
 
 ```json
 {

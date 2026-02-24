@@ -1,6 +1,6 @@
-# Voice Behavior Rules (Agent Voice MCP)
+# Voice Behavior Rules (VoiceSmith MCP)
 
-You have access to voice tools via the Agent Voice MCP server.
+You have access to voice tools via the VoiceSmith MCP server.
 
 ## Your Voice
 - Your default voice name is **{{MAIN_AGENT}}**, but your actual assigned name may differ if another session claimed it first.

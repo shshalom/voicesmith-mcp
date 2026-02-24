@@ -28,7 +28,7 @@ logger = get_logger("session-registry")
 
 def _sessions_path() -> Path:
     """Return the path to the sessions file."""
-    return Path.home() / ".local" / "share" / "agent-voice-mcp" / SESSIONS_FILE_NAME
+    return Path.home() / ".local" / "share" / "voicesmith-mcp" / SESSIONS_FILE_NAME
 
 
 def _pid_alive(pid: int) -> bool:
@@ -231,7 +231,7 @@ def register_session(
 
         # Read tmux session from env if not provided
         if tmux_session is None:
-            tmux_session = os.environ.get("AGENT_VOICE_TMUX")
+            tmux_session = os.environ.get("VOICESMITH_TMUX")
 
         session = {
             "name": name,

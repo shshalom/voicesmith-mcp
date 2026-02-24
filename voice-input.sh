@@ -11,13 +11,13 @@
 
 set -euo pipefail
 
-SESSIONS_FILE="$HOME/.local/share/agent-voice-mcp/sessions.json"
+SESSIONS_FILE="$HOME/.local/share/voicesmith-mcp/sessions.json"
 READY_SOUND="/System/Library/Sounds/Tink.aiff"
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 notify() {
-    osascript -e "display notification \"$1\" with title \"Agent Voice\""
+    osascript -e "display notification \"$1\" with title \"VoiceSmith\""
 }
 
 pause_voice_control() {

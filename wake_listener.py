@@ -100,7 +100,7 @@ class WakeWordListener:
         """Find a wake word model ONNX file by name."""
         search_paths = [
             os.path.join(os.path.dirname(__file__), "models", f"{name}.onnx"),
-            os.path.expanduser(f"~/.local/share/agent-voice-mcp/models/{name}.onnx"),
+            os.path.expanduser(f"~/.local/share/voicesmith-mcp/models/{name}.onnx"),
         ]
         for p in search_paths:
             if os.path.exists(p):

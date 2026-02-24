@@ -1,7 +1,7 @@
 """
-Configuration management for Agent Voice MCP Server.
+Configuration management for VoiceSmith MCP Server.
 
-Lookup order: $AGENT_VOICE_CONFIG → ~/.local/share/agent-voice-mcp/config.json → defaults
+Lookup order: $VOICESMITH_CONFIG → ~/.local/share/voicesmith-mcp/config.json → defaults
 Environment variables override individual config values.
 """
 
@@ -15,8 +15,8 @@ from shared import get_logger
 
 logger = get_logger("config")
 
-DEFAULT_CONFIG_PATH = Path.home() / ".local" / "share" / "agent-voice-mcp" / "config.json"
-DEFAULT_MODEL_DIR = Path.home() / ".local" / "share" / "agent-voice-mcp" / "models"
+DEFAULT_CONFIG_PATH = Path.home() / ".local" / "share" / "voicesmith-mcp" / "config.json"
+DEFAULT_MODEL_DIR = Path.home() / ".local" / "share" / "voicesmith-mcp" / "models"
 
 
 @dataclass
@@ -61,8 +61,8 @@ class AppConfig:
 
 
 def get_config_path() -> Path:
-    """Return the config file path, respecting $AGENT_VOICE_CONFIG."""
-    env_path = os.environ.get("AGENT_VOICE_CONFIG")
+    """Return the config file path, respecting $VOICESMITH_CONFIG."""
+    env_path = os.environ.get("VOICESMITH_CONFIG")
     if env_path:
         return Path(env_path).expanduser()
     return DEFAULT_CONFIG_PATH
@@ -73,8 +73,8 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
 
     Lookup order:
     1. Explicit config_path argument
-    2. $AGENT_VOICE_CONFIG environment variable
-    3. ~/.local/share/agent-voice-mcp/config.json
+    2. $VOICESMITH_CONFIG environment variable
+    3. ~/.local/share/voicesmith-mcp/config.json
     4. Built-in defaults
     """
     path = config_path or get_config_path()

@@ -1,5 +1,5 @@
 """
-Shared constants, types, and utilities for Agent Voice MCP Server.
+Shared constants, types, and utilities for VoiceSmith MCP Server.
 
 This module is the single source of truth for:
 - Audio constants and defaults
@@ -26,8 +26,8 @@ LISTEN_TIMEOUT = 15          # Default max seconds to wait for speech
 REGISTRY_SAVE_INTERVAL = 60  # Seconds between periodic registry saves
 DEFAULT_HTTP_PORT = 7865     # HTTP listener port for push-to-talk
 SESSIONS_FILE_NAME = "sessions.json"
-AUDIO_LOCK_PATH = "/tmp/agent-voice-audio.lock"
-WAKE_MIC_LOCK_PATH = "/tmp/agent-voice-wake-mic.lock"
+AUDIO_LOCK_PATH = "/tmp/voicesmith-audio.lock"
+WAKE_MIC_LOCK_PATH = "/tmp/voicesmith-wake-mic.lock"
 READY_SOUND = "/System/Library/Sounds/Tink.aiff"
 WAKE_WORD_FRAME_SIZE = 1280  # openWakeWord frame size (80ms at 16kHz)
 DEFAULT_WAKE_THRESHOLD = 0.5 # Wake word detection confidence threshold
@@ -281,7 +281,7 @@ class MicCaptureError(Exception):
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
-def get_logger(name: str = "agent-voice-mcp") -> logging.Logger:
+def get_logger(name: str = "voicesmith-mcp") -> logging.Logger:
     """Get a logger that outputs to stderr (MCP convention: stdout is reserved for protocol)."""
     logger = logging.getLogger(name)
     if not logger.handlers:

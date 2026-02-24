@@ -1,5 +1,5 @@
 /**
- * Agent Voice MCP — Quick smoke test.
+ * VoiceSmith MCP — Quick smoke test.
  *
  * Runs `python server.py --test` to verify TTS works.
  */
@@ -34,12 +34,12 @@ async function run() {
     : null;
 
   if (!pythonPath) {
-    logError("Python venv not found. Run 'npx agent-voice-mcp install' first.");
+    logError("Python venv not found. Run 'npx voicesmith-mcp install' first.");
     process.exit(1);
   }
 
   if (!serverPath) {
-    logError("server.py not found. Run 'npx agent-voice-mcp install' first.");
+    logError("server.py not found. Run 'npx voicesmith-mcp install' first.");
     process.exit(1);
   }
 

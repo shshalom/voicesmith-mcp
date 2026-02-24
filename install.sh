@@ -1,5 +1,5 @@
 #!/bin/bash
-# Agent Voice MCP — Shell installer (alternative to npx)
+# VoiceSmith MCP — Shell installer (alternative to npx)
 # Usage: ./install.sh [--claude] [--cursor] [--codex] [--all]
 set -e
 
@@ -11,11 +11,11 @@ RED="\033[31m"
 DIM="\033[2m"
 RESET="\033[0m"
 
-INSTALL_DIR="$HOME/.local/share/agent-voice-mcp"
+INSTALL_DIR="$HOME/.local/share/voicesmith-mcp"
 MODEL_DIR="$INSTALL_DIR/models"
 VENV_DIR="$INSTALL_DIR/.venv"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SENTINEL="<!-- installed by agent-voice-mcp -->"
+SENTINEL="<!-- installed by voicesmith-mcp -->"
 
 ok()     { echo -e "  ${GREEN}✓${RESET} $1"; }
 action() { echo -ne "  ${BLUE}→${RESET} $1"; }
@@ -35,7 +35,7 @@ for arg in "$@"; do
     esac
 done
 
-echo -e "\n${BOLD}🎙️  Agent Voice MCP — Local AI Voice System${RESET}\n"
+echo -e "\n${BOLD}🎙️  VoiceSmith MCP — Local AI Voice System${RESET}\n"
 
 # ─── Step 1: System deps ─────────────────────────────────────────────────
 echo -e "\n${BOLD}Step 1/6: Checking system dependencies...${RESET}"
@@ -266,7 +266,7 @@ MCP_ENTRY="{\"command\": \"$VENV_DIR/bin/python3\", \"args\": [\"$INSTALL_DIR/se
 configure_mcp() {
     local config_path="$1" ide_name="$2"
 
-    if [ -f "$config_path" ] && grep -q "agent-voice" "$config_path" 2>/dev/null; then
+    if [ -f "$config_path" ] && grep -q "voicesmith" "$config_path" 2>/dev/null; then
         ok "$ide_name: already configured"
         return
     fi
@@ -279,7 +279,7 @@ import json
 with open('$config_path') as f:
     config = json.load(f)
 config.setdefault('mcpServers', {})
-config['mcpServers']['agent-voice'] = {
+config['mcpServers']['voicesmith'] = {
     'command': '$VENV_DIR/bin/python3',
     'args': ['$INSTALL_DIR/server.py']
 }
@@ -290,7 +290,7 @@ with open('$config_path', 'w') as f:
         cat > "$config_path" << MCPEOF
 {
   "mcpServers": {
-    "agent-voice": {
+    "voicesmith": {
       "command": "$VENV_DIR/bin/python3",
       "args": ["$INSTALL_DIR/server.py"]
     }
@@ -311,13 +311,13 @@ done
 
 # Clean up legacy ~/.claude/mcp.json
 LEGACY_MCP="$HOME/.claude/mcp.json"
-if [ -f "$LEGACY_MCP" ] && grep -q "agent-voice" "$LEGACY_MCP" 2>/dev/null; then
+if [ -f "$LEGACY_MCP" ] && grep -q "voicesmith" "$LEGACY_MCP" 2>/dev/null; then
     "$VENV_DIR/bin/python3" -c "
 import json, os
 with open('$LEGACY_MCP') as f:
     data = json.load(f)
-if 'mcpServers' in data and 'agent-voice' in data['mcpServers']:
-    del data['mcpServers']['agent-voice']
+if 'mcpServers' in data and 'voicesmith' in data['mcpServers']:
+    del data['mcpServers']['voicesmith']
     if not data['mcpServers']:
         os.unlink('$LEGACY_MCP')
     else:
@@ -446,17 +446,17 @@ if [ -n "$RULES_BLOCK" ]; then
                 inject_rules "$HOME/.claude/CLAUDE.md" "Claude Code:"
                 ;;
             cursor)
-                CURSOR_RULE="$HOME/.cursor/rules/agent-voice.mdc"
+                CURSOR_RULE="$HOME/.cursor/rules/voicesmith.mdc"
                 mkdir -p "$(dirname "$CURSOR_RULE")"
                 cat > "$CURSOR_RULE" << CURSOREOF
 ---
-description: Voice interaction rules for Agent Voice MCP server
+description: Voice interaction rules for VoiceSmith MCP server
 globs:
 alwaysApply: true
 ---
 
 $SENTINEL
-# Voice Behavior Rules (Agent Voice MCP)
+# Voice Behavior Rules (VoiceSmith MCP)
 
 $RULES_BLOCK
 CURSOREOF
@@ -484,4 +484,4 @@ ide_names=${ide_names%, }
 
 echo -e "\n🎉 ${BOLD}Done!${RESET} Configured for: ${ide_names:-Claude Code}"
 echo '   Restart your IDE session, then voice tools will be available.'
-echo -e '   Run "npx agent-voice-mcp test" to hear a sample voice.\n'
+echo -e '   Run "npx voicesmith-mcp test" to hear a sample voice.\n'

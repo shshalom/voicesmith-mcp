@@ -1,7 +1,7 @@
 {
   "tts": {
-    "model_path": "~/.local/share/agent-voice-mcp/models/kokoro-v1.0.onnx",
-    "voices_path": "~/.local/share/agent-voice-mcp/models/voices-v1.0.bin",
+    "model_path": "~/.local/share/voicesmith-mcp/models/kokoro-v1.0.onnx",
+    "voices_path": "~/.local/share/voicesmith-mcp/models/voices-v1.0.bin",
     "default_voice": "am_eric",
     "default_speed": 1.0,
     "audio_player": "mpv"

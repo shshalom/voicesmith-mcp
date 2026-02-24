@@ -56,7 +56,7 @@ class VoiceActivityDetector:
             pass
 
         for path in [
-            os.path.expanduser("~/.local/share/agent-voice-mcp/models/silero_vad.onnx"),
+            os.path.expanduser("~/.local/share/voicesmith-mcp/models/silero_vad.onnx"),
             os.path.join(os.path.dirname(__file__), "..", "models", "silero_vad.onnx"),
         ]:
             if os.path.exists(path):

@@ -2,7 +2,7 @@
 
 ## Context
 
-The Agent Voice MCP Server provides AI-initiated listening via the `listen` and `speak_then_listen` tools. This spec adds **user-initiated voice input** — the user says a wake phrase and their speech is transcribed and delivered to the correct IDE session, without touching the keyboard or focusing the window.
+The VoiceSmith MCP Server provides AI-initiated listening via the `listen` and `speak_then_listen` tools. This spec adds **user-initiated voice input** — the user says a wake phrase and their speech is transcribed and delivered to the correct IDE session, without touching the keyboard or focusing the window.
 
 ## Overview
 
@@ -47,28 +47,28 @@ User says: "Hey listen... add error handling to the login"
 
 The installer creates a shell initialization script and adds a single source line to the user's shell profile.
 
-**File: `~/.local/share/agent-voice-mcp/shell-init.sh`**
+**File: `~/.local/share/voicesmith-mcp/shell-init.sh`**
 
 Contains all functions, aliases, and tmux configuration:
 
 ```bash
 #!/bin/bash
-# Agent Voice MCP — Shell initialization
+# VoiceSmith MCP — Shell initialization
 # Sourced from ~/.zshrc or ~/.bashrc
 
 # Only set up the alias if wake word feature is enabled
-if [ -f "$HOME/.local/share/agent-voice-mcp/config.json" ]; then
-    _agent_voice_wake_enabled=$(python3 -c "
+if [ -f "$HOME/.local/share/voicesmith-mcp/config.json" ]; then
+    _voicesmith_wake_enabled=$(python3 -c "
 import json
-with open('$HOME/.local/share/agent-voice-mcp/config.json') as f:
+with open('$HOME/.local/share/voicesmith-mcp/config.json') as f:
     print(json.load(f).get('wake_word', {}).get('enabled', False))
 " 2>/dev/null)
 
-    if [ "$_agent_voice_wake_enabled" = "True" ]; then
+    if [ "$_voicesmith_wake_enabled" = "True" ]; then
         claude-voice() {
             if [ -n "$TMUX" ]; then
                 # Already in tmux — just set the env var and run claude directly
-                export AGENT_VOICE_TMUX=$(tmux display-message -p '#S')
+                export VOICESMITH_TMUX=$(tmux display-message -p '#S')
                 command claude "$@"
             else
                 local session_name="agent-voice-$$"
@@ -76,20 +76,20 @@ with open('$HOME/.local/share/agent-voice-mcp/config.json') as f:
                 local args_file
                 args_file=$(mktemp /tmp/agent-voice-args.XXXXXX)
                 printf '%s\0' "$@" > "$args_file"
-                tmux -f "$HOME/.local/share/agent-voice-mcp/tmux.conf" \
+                tmux -f "$HOME/.local/share/voicesmith-mcp/tmux.conf" \
                     new-session -s "$session_name" \
-                    -e "AGENT_VOICE_TMUX=$session_name" \
-                    -e "AGENT_VOICE_ARGS=$args_file" \
-                    "$HOME/.local/share/agent-voice-mcp/tmux-launcher.sh"
+                    -e "VOICESMITH_TMUX=$session_name" \
+                    -e "VOICESMITH_ARGS=$args_file" \
+                    "$HOME/.local/share/voicesmith-mcp/tmux-launcher.sh"
             fi
         }
         alias claude='claude-voice'
     fi
-    unset _agent_voice_wake_enabled
+    unset _voicesmith_wake_enabled
 fi
 ```
 
-**File: `~/.local/share/agent-voice-mcp/tmux-launcher.sh`**
+**File: `~/.local/share/voicesmith-mcp/tmux-launcher.sh`**
 
 Reads serialized args and launches claude with proper quoting:
 
@@ -97,21 +97,21 @@ Reads serialized args and launches claude with proper quoting:
 #!/bin/bash
 # Launched inside tmux — reads args from file, runs claude, cleans up
 args=()
-if [ -f "$AGENT_VOICE_ARGS" ]; then
+if [ -f "$VOICESMITH_ARGS" ]; then
     while IFS= read -r -d '' arg; do
         args+=("$arg")
-    done < "$AGENT_VOICE_ARGS"
-    rm -f "$AGENT_VOICE_ARGS"
+    done < "$VOICESMITH_ARGS"
+    rm -f "$VOICESMITH_ARGS"
 fi
 exec command claude "${args[@]}"
 ```
 
-**File: `~/.local/share/agent-voice-mcp/tmux.conf`**
+**File: `~/.local/share/voicesmith-mcp/tmux.conf`**
 
 Minimal tmux config for invisible operation:
 
 ```
-# Agent Voice MCP — tmux config (invisible mode)
+# VoiceSmith MCP — tmux config (invisible mode)
 set -g status off
 set -g mouse on
 set -g prefix C-b        # Keep default prefix (required by tmux)
@@ -125,8 +125,8 @@ set -g remain-on-exit off      # Don't keep pane after process exits
 **Added to `~/.zshrc` (or `~/.bashrc`):**
 
 ```bash
-# agent-voice-mcp
-[ -f ~/.local/share/agent-voice-mcp/shell-init.sh ] && source ~/.local/share/agent-voice-mcp/shell-init.sh
+# voicesmith-mcp
+[ -f ~/.local/share/voicesmith-mcp/shell-init.sh ] && source ~/.local/share/voicesmith-mcp/shell-init.sh
 ```
 
 **Benefits:**
@@ -256,7 +256,7 @@ A custom openWakeWord model trained for the phrase "Hey listen", shipped as a ~2
 
 ### Future: Custom Wake Words
 
-A future `npx agent-voice-mcp train-wake-word "Hey Nova"` command could run the training pipeline locally or via Colab. Not in scope for v1. Training requires ~100 synthetic positive samples and ~1000 negative samples, taking approximately 1 hour on Colab.
+A future `npx voicesmith-mcp train-wake-word "Hey Nova"` command could run the training pipeline locally or via Colab. Not in scope for v1. Training requires ~100 synthetic positive samples and ~1000 negative samples, taking approximately 1 hour on Colab.
 
 ---
 
@@ -264,7 +264,7 @@ A future `npx agent-voice-mcp train-wake-word "Hey Nova"` command could run the 
 
 ### Definition
 
-The session registry is a shared JSON file at `~/.local/share/agent-voice-mcp/sessions.json` that tracks all active MCP server sessions. It is the same registry defined in `session_registry.py` (already implemented).
+The session registry is a shared JSON file at `~/.local/share/voicesmith-mcp/sessions.json` that tracks all active MCP server sessions. It is the same registry defined in `session_registry.py` (already implemented).
 
 **Schema:**
 ```json
@@ -282,7 +282,7 @@ The session registry is a shared JSON file at `~/.local/share/agent-voice-mcp/se
 }
 ```
 
-**New field:** `tmux_session` — the tmux session name read from `$AGENT_VOICE_TMUX`. May be `null` if the user didn't launch via the alias (wake word won't work for that session, but all other features do).
+**New field:** `tmux_session` — the tmux session name read from `$VOICESMITH_TMUX`. May be `null` if the user didn't launch via the alias (wake word won't work for that session, but all other features do).
 
 ### Lifecycle
 
@@ -337,7 +337,7 @@ Sessions: [Eric:agent-voice-123]
 
 The wake word feature is optional. Installed with:
 ```bash
-npx agent-voice-mcp install --with-voice-wake
+npx voicesmith-mcp install --with-voice-wake
 ```
 
 Without the flag, the feature is not installed:
@@ -396,20 +396,20 @@ The `status` tool includes wake word state:
 **Step 3 (models):** Also downloads the "Hey listen" wake word model to `models/hey_listen.onnx`.
 
 **Step 6 (voice rules):** Also:
-- Creates `~/.local/share/agent-voice-mcp/shell-init.sh` (functions + alias)
-- Creates `~/.local/share/agent-voice-mcp/tmux-launcher.sh` (arg-preserving launcher)
-- Creates `~/.local/share/agent-voice-mcp/tmux.conf` (invisible tmux config)
+- Creates `~/.local/share/voicesmith-mcp/shell-init.sh` (functions + alias)
+- Creates `~/.local/share/voicesmith-mcp/tmux-launcher.sh` (arg-preserving launcher)
+- Creates `~/.local/share/voicesmith-mcp/tmux.conf` (invisible tmux config)
 - Adds one source line to `~/.zshrc` (or `~/.bashrc`):
 ```bash
-# agent-voice-mcp
-[ -f ~/.local/share/agent-voice-mcp/shell-init.sh ] && source ~/.local/share/agent-voice-mcp/shell-init.sh
+# voicesmith-mcp
+[ -f ~/.local/share/voicesmith-mcp/shell-init.sh ] && source ~/.local/share/voicesmith-mcp/shell-init.sh
 ```
 
-**Sentinel comment** for clean uninstall — the source line is identified by the `# agent-voice-mcp` comment.
+**Sentinel comment** for clean uninstall — the source line is identified by the `# voicesmith-mcp` comment.
 
 ### Uninstall
 
-`npx agent-voice-mcp uninstall` also:
+`npx voicesmith-mcp uninstall` also:
 - Removes the source line from `~/.zshrc` / `~/.bashrc`
 - Removes `shell-init.sh`, `tmux-launcher.sh`, and `tmux.conf` (part of the install dir cleanup)
 - Removes the wake word model
@@ -459,7 +459,7 @@ Total additional footprint: ~3MB. No torch, no GPU.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `AGENT_VOICE_TMUX` | tmux session name (set by shell alias) | none |
+| `VOICESMITH_TMUX` | tmux session name (set by shell alias) | none |
 | `VOICE_WAKE_ENABLED` | Override wake word on/off | from config |
 
 ---
@@ -498,7 +498,7 @@ Total additional footprint: ~3MB. No torch, no GPU.
 
 ## Verification
 
-1. `npx agent-voice-mcp install --with-voice-wake` → installs tmux, openwakeword, shell-init
+1. `npx voicesmith-mcp install --with-voice-wake` → installs tmux, openwakeword, shell-init
 2. Open new terminal → `claude` launches inside tmux (invisible)
 3. Verify: `claude -c` and `claude "do something"` work (arg quoting preserved)
 4. `status` tool shows `wake_word.listening: true` and `tmux_session`
@@ -511,7 +511,7 @@ Total additional footprint: ~3MB. No torch, no GPU.
 11. `wake_enable` tool → wake listener resumes
 12. Close Claude Code → tmux session auto-destroys (no lingering)
 13. `kill -9` the server → tmux session auto-destroys, sessions.json cleaned on next start
-14. `npx agent-voice-mcp uninstall` → source line removed from .zshrc, clean state
+14. `npx voicesmith-mcp uninstall` → source line removed from .zshrc, clean state
 
 ---
 
@@ -527,7 +527,7 @@ Total additional footprint: ~3MB. No torch, no GPU.
 
 ## Future Enhancements
 
-- Custom wake word training: `npx agent-voice-mcp train-wake-word "Hey Eric"` (~1 hour, requires ~100 synthetic positive samples + ~1000 negative samples)
+- Custom wake word training: `npx voicesmith-mcp train-wake-word "Hey Eric"` (~1 hour, requires ~100 synthetic positive samples + ~1000 negative samples)
 - GUI editor support via InputMethodKit or sendkeys
 - Visual indicator (menu bar icon) when wake listener is active
 - Linux ready sound via bundled WAV + `aplay` / `paplay`
