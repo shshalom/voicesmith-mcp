@@ -471,6 +471,63 @@ CURSOREOF
     done
 fi
 
+# Copy hooks directory to install dir
+if [ -d "$SCRIPT_DIR/hooks" ]; then
+    mkdir -p "$INSTALL_DIR/hooks"
+    cp "$SCRIPT_DIR/hooks/"* "$INSTALL_DIR/hooks/"
+    chmod +x "$INSTALL_DIR/hooks/"*.sh 2>/dev/null
+    ok "Hooks copied to $INSTALL_DIR/hooks"
+fi
+
+# Register SessionStart hook in Claude settings (for voice name discovery)
+for ide in "${TARGET_IDES[@]}"; do
+    if [ "$ide" = "claude" ]; then
+        SETTINGS_FILE="$HOME/.claude/settings.json"
+        HOOK_CMD="$INSTALL_DIR/hooks/session-start.sh"
+        mkdir -p "$(dirname "$SETTINGS_FILE")"
+
+        "$VENV_DIR/bin/python3" -c "
+import json, os
+
+settings_path = '$SETTINGS_FILE'
+hook_cmd = '$HOOK_CMD'
+
+settings = {}
+if os.path.exists(settings_path):
+    with open(settings_path) as f:
+        settings = json.load(f)
+
+if 'hooks' not in settings:
+    settings['hooks'] = {}
+if 'SessionStart' not in settings['hooks']:
+    settings['hooks']['SessionStart'] = []
+
+# Check if already registered
+already = any(
+    any(h.get('command', '').find('voicesmith-mcp') >= 0 for h in entry.get('hooks', []))
+    for entry in settings['hooks']['SessionStart']
+)
+
+if not already:
+    settings['hooks']['SessionStart'].append({
+        'matcher': '',
+        'hooks': [{'type': 'command', 'command': hook_cmd, 'timeout': 3}]
+    })
+    with open(settings_path, 'w') as f:
+        json.dump(settings, f, indent=2)
+    print('registered')
+else:
+    print('exists')
+" 2>/dev/null
+
+        hook_result=$?
+        if [ "$hook_result" = "0" ]; then
+            ok "Claude Code: SessionStart hook registered"
+        fi
+        break
+    fi
+done
+
 # ─── Done ────────────────────────────────────────────────────────────────
 ide_names=""
 for ide in "${TARGET_IDES[@]}"; do

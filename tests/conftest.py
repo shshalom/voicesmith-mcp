@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for Agent Voice MCP Server tests."""
+"""Shared pytest fixtures for VoiceSmith MCP Server tests."""
 
 import sys
 from pathlib import Path

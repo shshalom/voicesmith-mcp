@@ -124,6 +124,26 @@ async function run() {
     logOk("Removed voice-rules.md template");
   }
 
+  // Remove SessionStart hook from Claude settings
+  const settingsPath = path.join(require("os").homedir(), ".claude", "settings.json");
+  if (fileExists(settingsPath)) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      if (settings.hooks && settings.hooks.SessionStart) {
+        const before = settings.hooks.SessionStart.length;
+        settings.hooks.SessionStart = settings.hooks.SessionStart.filter(
+          (entry) => !entry.hooks || !entry.hooks.some(
+            (h) => h.command && h.command.includes("voicesmith-mcp")
+          )
+        );
+        if (settings.hooks.SessionStart.length < before) {
+          fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+          logOk("Removed SessionStart hook from Claude settings");
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
   // Remove wake word source line from shell profiles
   const os = require("os");
   const path = require("path");

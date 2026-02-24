@@ -1,4 +1,4 @@
-"""STT subsystem for Agent Voice MCP Server."""
+"""STT subsystem for VoiceSmith MCP Server."""
 
 from stt.whisper_engine import WhisperEngine
 from stt.vad import VoiceActivityDetector

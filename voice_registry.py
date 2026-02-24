@@ -1,5 +1,5 @@
 """
-Voice registry for Agent Voice MCP Server.
+Voice registry for VoiceSmith MCP Server.
 
 Maps agent names to Kokoro voice IDs with auto-discovery:
 1. Name matching (e.g., "Eric" -> am_eric)

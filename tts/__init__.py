@@ -1,4 +1,4 @@
-"""TTS subsystem for Agent Voice MCP Server."""
+"""TTS subsystem for VoiceSmith MCP Server."""
 
 from tts.kokoro_engine import KokoroEngine
 from tts.audio_player import AudioPlayer

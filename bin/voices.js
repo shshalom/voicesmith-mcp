@@ -1,5 +1,5 @@
 /**
- * Agent Voice MCP — Browse available voices.
+ * VoiceSmith MCP — Browse available voices.
  *
  * Displays all Kokoro voices grouped by language and gender.
  */

@@ -1,5 +1,5 @@
 """
-Agent Voice MCP Server
+VoiceSmith MCP Server
 
 A Model Context Protocol server providing local TTS (Kokoro ONNX) and STT
 (faster-whisper) capabilities. Runs over stdio transport.
@@ -145,7 +145,7 @@ def _init_wake(config: AppConfig):
     try:
         from wake_listener import WakeWordListener
 
-        tmux_session = os.environ.get("AGENT_VOICE_TMUX")
+        tmux_session = os.environ.get("VOICESMITH_TMUX")
         _wake_listener = WakeWordListener(
             stt_engine=_stt_engine,
             vad=_vad,
@@ -740,7 +740,7 @@ def main():
     if log_level:
         logger.setLevel(log_level)
 
-    logger.info("Starting Agent Voice MCP Server...")
+    logger.info("Starting VoiceSmith MCP Server...")
 
     # Initialize subsystems
     _init_tts(_config)

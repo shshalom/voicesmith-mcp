@@ -509,7 +509,18 @@ async function step6_voiceRules(configuredIdes) {
 
   // Update config.json with chosen voice
   if (fileExists(CONFIG_FILE)) {
-    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    let config;
+    try {
+      config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    } catch {
+      // Config corrupted (e.g., truncated by a concurrent server write) — recreate from defaults
+      const configSrc = path.join(PKG_DIR, "config.json");
+      config = fileExists(configSrc)
+        ? JSON.parse(fs.readFileSync(configSrc, "utf8"))
+        : { tts: {}, stt: {}, main_agent: "Eric" };
+      logWarn("config.json was corrupted, recreated from defaults");
+    }
+    if (!config.tts) config.tts = {};
     config.tts.default_voice = voice.id;
     config.main_agent = mainAgent;
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
@@ -556,6 +567,60 @@ async function step6_voiceRules(configuredIdes) {
         fs.writeFileSync(ruleConfig.path, existing + generateAppendBlock(mainAgent));
         logOk(`${IDE_CONFIGS[ideKey].name}: voice rules added to ${ruleConfig.path}`);
       }
+    }
+  }
+
+  // Copy hooks directory to install dir
+  const hooksSrc = path.join(PKG_DIR, "hooks");
+  const hooksDest = path.join(INSTALL_DIR, "hooks");
+  if (dirExists(hooksSrc)) {
+    ensureDir(hooksDest);
+    for (const file of fs.readdirSync(hooksSrc)) {
+      const srcPath = path.join(hooksSrc, file);
+      if (fs.statSync(srcPath).isFile()) {
+        fs.copyFileSync(srcPath, path.join(hooksDest, file));
+        fs.chmodSync(path.join(hooksDest, file), 0o755);
+      }
+    }
+  }
+
+  // Register SessionStart hook in Claude settings (for voice name discovery)
+  if (configuredIdes && configuredIdes.includes("claude")) {
+    const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
+    const hookCommand = path.join(INSTALL_DIR, "hooks", "session-start.sh");
+
+    try {
+      let settings = {};
+      if (fileExists(settingsPath)) {
+        settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      }
+
+      if (!settings.hooks) settings.hooks = {};
+      if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
+
+      // Check if our hook is already registered
+      const existingHook = settings.hooks.SessionStart.find(
+        (entry) => entry.hooks && entry.hooks.some(
+          (h) => h.command && h.command.includes("voicesmith-mcp")
+        )
+      );
+
+      if (!existingHook) {
+        settings.hooks.SessionStart.push({
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: hookCommand,
+            timeout: 3,
+          }],
+        });
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+        logOk("Claude Code: SessionStart hook registered");
+      } else {
+        logOk("Claude Code: SessionStart hook already registered");
+      }
+    } catch (err) {
+      logWarn(`Could not register SessionStart hook: ${err.message}`);
     }
   }
 }
