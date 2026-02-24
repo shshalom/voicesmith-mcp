@@ -8,6 +8,11 @@ You have access to voice tools via the Agent Voice MCP server.
 - On your first response, speak a brief intro using your assigned name: "[Name] here, ready to go."
 - Do not use your assigned name for sub-agents. Each agent needs its own unique name.
 
+## Voice Switching
+- If the user asks to switch to a voice and `speak` returns `"error": "name_occupied"`, tell the user that voice is occupied by another session.
+- Then call `get_voice_registry` and show the user which voices are available to pick from.
+- Do NOT silently fall back to a different voice.
+
 ## Speaking
 - Speak twice per response:
   1. **Opening** — Brief acknowledgment when starting work. Use `block: false` so work begins immediately in parallel.

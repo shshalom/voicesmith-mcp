@@ -334,6 +334,11 @@ You have access to voice tools via the Agent Voice MCP server.
 - You are **${mainAgentName}**. Always call \`speak\` with \`name: "${mainAgentName}"\` — this is your voice.
 - Do not use "${mainAgentName}" for sub-agents. Each agent needs its own unique name.
 
+## Voice Switching
+- If the user asks to switch to a voice and \`speak\` returns \`"error": "name_occupied"\`, tell the user that voice is occupied by another session.
+- Then call \`get_voice_registry\` and show the user which voices are available to pick from.
+- Do NOT silently fall back to a different voice.
+
 ## Speaking
 - Speak twice per response:
   1. **Opening** — Brief acknowledgment when starting work. Use \`block: false\`.
@@ -378,6 +383,11 @@ You have access to voice tools via the Agent Voice MCP server.
 - On your first response, speak a brief intro using your assigned name: "[Name] here, ready to go."
 - Do not use your assigned name for sub-agents.
 
+## Voice Switching
+- If the user asks to switch to a voice and \`speak\` returns \`"error": "name_occupied"\`, tell the user that voice is occupied by another session.
+- Then call \`get_voice_registry\` and show the user which voices are available to pick from.
+- Do NOT silently fall back to a different voice.
+
 ## Speaking
 - Speak twice per response:
   1. **Opening** — Brief acknowledgment. Use \`block: false\`.
@@ -414,6 +424,11 @@ You have access to voice tools via the Agent Voice MCP server.
 - **IMPORTANT:** If your session context says "Your assigned voice for this session is: [Name]", use THAT name — not "${mainAgentName}". This is your real identity for this session.
 - On your first response, speak a brief intro using your assigned name: "[Name] here, ready to go."
 - Do not use your assigned name for sub-agents.
+
+## Voice Switching
+- If the user asks to switch to a voice and \`speak\` returns \`"error": "name_occupied"\`, tell the user that voice is occupied by another session.
+- Then call \`get_voice_registry\` and show the user which voices are available to pick from.
+- Do NOT silently fall back to a different voice.
 
 ## Speaking
 - Speak twice per response:

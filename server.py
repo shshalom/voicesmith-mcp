@@ -12,7 +12,9 @@ Usage:
 import asyncio
 import json
 import os
+import platform
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -30,6 +32,7 @@ from shared import (
     LISTEN_TIMEOUT,
     REGISTRY_SAVE_INTERVAL,
     DEFAULT_HTTP_PORT,
+    READY_SOUND,
     SpeakResult,
     ListenResult,
     TTSEngineError,
@@ -61,6 +64,7 @@ _muted = False
 _listen_cancel_event: asyncio.Event = None
 _listen_active = False
 _startup_time = time.time()
+_last_tool_call = time.time()  # Updated on every MCP tool call
 _session_info: dict = None
 _event_loop: asyncio.AbstractEventLoop = None
 _wake_listener = None
@@ -101,7 +105,7 @@ def _init_stt(config: AppConfig):
         _stt_engine = None
 
     try:
-        _vad = VoiceActivityDetector()
+        _vad = VoiceActivityDetector(threshold=config.stt.vad_threshold)
     except VADError as e:
         logger.warning(f"VAD initialization failed: {e}")
         _vad = None
@@ -171,6 +175,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
                 "ready": True,
                 "name": _session_info.get("name") if _session_info else None,
                 "port": _session_info.get("port") if _session_info else None,
+                "last_tool_call_age_s": round(time.time() - _last_tool_call),
             })
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -291,6 +296,22 @@ def _shutdown():
         logger.error(f"Failed to unregister session: {e}")
 
 
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def _play_ready_sound():
+    """Play a short ready sound (Tink) to signal the user to start speaking."""
+    if _muted:
+        return
+    if platform.system() != "Darwin":
+        return
+    if not os.path.exists(READY_SOUND):
+        return
+    try:
+        subprocess.run(["afplay", READY_SOUND], capture_output=True, timeout=2)
+    except Exception as e:
+        logger.debug(f"Ready sound failed: {e}")
+
+
 # ─── MCP Tools ────────────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -305,13 +326,21 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
     """
     _capture_event_loop()
 
-    # Session voice override: if the AI uses the configured main_agent name
-    # but this session was assigned a different name (e.g., "Eric" is taken,
-    # this session is "Adam"), use the session's actual name instead.
-    if (_session_info and _config
-            and name == _config.main_agent
-            and _session_info["name"] != _config.main_agent):
-        name = _session_info["name"]
+    # If the AI uses the preferred name (main_agent or last_voice_name) but
+    # this session was assigned a different name (because the preferred name
+    # was taken by another active session), inform the caller.
+    if _session_info and _config:
+        preferred = _config.last_voice_name or _config.main_agent
+        if name == preferred and _session_info["name"] != preferred:
+            return {
+                "success": False,
+                "error": "name_occupied",
+                "message": f"'{preferred}' is occupied by another session. "
+                           f"This session is '{_session_info['name']}'. "
+                           f"Use name='{_session_info['name']}' instead.",
+                "session_name": _session_info["name"],
+                "session_voice": _session_info["voice"],
+            }
 
     if _tts_engine is None or _speech_queue is None:
         return {"success": False, "error": "tts_unavailable", "message": "TTS engine not loaded"}
@@ -392,6 +421,12 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
         logger.info(f"Listening (prompt: {prompt})")
 
     try:
+        # Play ready sound so the user knows to start speaking
+        # Skip for push-to-talk (HTTP) — it has its own beep
+        if prompt != "push-to-talk":
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _play_ready_sound)
+
         start = time.perf_counter()
 
         # Record audio with VAD
@@ -460,6 +495,11 @@ async def speak_then_listen(
 
     listen_result = await listen(timeout=timeout, silence_threshold=silence_threshold)
 
+    # If listen timed out, speak a nudge and fall back to text
+    if listen_result.get("error") == "timeout":
+        nudge_result = await speak(name, "I didn't catch that. Go ahead and type it.", speed, block=True)
+        listen_result["nudge_spoken"] = nudge_result.get("success", False)
+
     return {"speak": speak_result, "listen": listen_result}
 
 
@@ -507,6 +547,15 @@ async def set_voice(name: str, voice: str) -> dict:
         }
 
     _registry.set_voice(name, voice)
+
+    # Persist last voice name so it survives session restart / resume
+    if _config is not None:
+        _config.last_voice_name = name
+        try:
+            save_config(_config)
+        except Exception as e:
+            logger.warning(f"Failed to persist last_voice_name: {e}")
+
     return {"success": True, "name": name, "voice": voice}
 
 
@@ -716,10 +765,21 @@ def main():
 
     logger.info(f"Server ready (TTS: {'OK' if tts_ok else 'FAILED'}, STT: {'OK' if stt_ok else 'FAILED'})")
 
+    # Determine preferred name: use last_voice_name if set (resume scenario)
+    if _config.last_voice_name:
+        preferred_name = _config.last_voice_name
+        preferred_voice = _config.voice_registry.get(
+            preferred_name, _config.tts.default_voice
+        )
+        logger.info(f"Resuming with last voice: {preferred_name} ({preferred_voice})")
+    else:
+        preferred_name = _config.main_agent
+        preferred_voice = _config.tts.default_voice
+
     # Register session for multi-session coordination
     _session_info = register_session(
-        preferred_name=_config.main_agent,
-        preferred_voice=_config.tts.default_voice,
+        preferred_name=preferred_name,
+        preferred_voice=preferred_voice,
         base_port=_config.http_port,
     )
 
@@ -768,12 +828,15 @@ def _start_preheat_intro():
 
 
 def _capture_event_loop():
-    """Capture the asyncio event loop from within an async context.
+    """Capture the asyncio event loop and update last-activity timestamp.
 
-    Called on the first MCP tool invocation to grab the running loop
-    for use by the HTTP listener's run_coroutine_threadsafe().
+    Called on every MCP tool invocation. Grabs the running loop on first call
+    for use by the HTTP listener's run_coroutine_threadsafe(). Also updates
+    _last_tool_call so the HTTP /status endpoint can report activity age,
+    allowing stale session detection by other servers.
     """
-    global _event_loop
+    global _event_loop, _last_tool_call
+    _last_tool_call = time.time()
     if _event_loop is None:
         try:
             _event_loop = asyncio.get_running_loop()
@@ -783,7 +846,7 @@ def _capture_event_loop():
 
 
 def _start_periodic_save_thread():
-    """Start a daemon thread that periodically saves the registry."""
+    """Start a daemon thread that periodically saves the registry and cleans stale sessions."""
     import threading
 
     def _save_loop():
@@ -796,6 +859,13 @@ def _start_periodic_save_thread():
                     logger.debug("Periodic registry save completed")
                 except Exception as e:
                     logger.error(f"Periodic registry save failed: {e}")
+
+            # Clean stale sessions (dead PIDs) from sessions.json
+            try:
+                from session_registry import get_active_sessions
+                get_active_sessions()
+            except Exception as e:
+                logger.error(f"Periodic session cleanup failed: {e}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Agent Voice MCP — Shell installer (alternative to npx)
-# Usage: ./install.sh
+# Usage: ./install.sh [--claude] [--cursor] [--codex] [--all]
 set -e
 
 BOLD="\033[1m"
@@ -15,12 +15,25 @@ INSTALL_DIR="$HOME/.local/share/agent-voice-mcp"
 MODEL_DIR="$INSTALL_DIR/models"
 VENV_DIR="$INSTALL_DIR/.venv"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SENTINEL="<!-- installed by agent-voice-mcp -->"
 
 ok()     { echo -e "  ${GREEN}✓${RESET} $1"; }
 action() { echo -ne "  ${BLUE}→${RESET} $1"; }
 warn()   { echo -e "  ${YELLOW}⚠${RESET} $1"; }
 err()    { echo -e "  ${RED}✗${RESET} $1"; }
 info()   { echo -e "  ${DIM}ℹ${RESET} $1"; }
+
+# ─── Parse flags ────────────────────────────────────────────────────────
+TARGET_IDES=()
+
+for arg in "$@"; do
+    case "$arg" in
+        --claude) TARGET_IDES+=("claude") ;;
+        --cursor) TARGET_IDES+=("cursor") ;;
+        --codex)  TARGET_IDES+=("codex") ;;
+        --all)    TARGET_IDES=("claude" "cursor" "codex") ;;
+    esac
+done
 
 echo -e "\n${BOLD}🎙️  Agent Voice MCP — Local AI Voice System${RESET}\n"
 
@@ -74,7 +87,7 @@ echo -e "\n${BOLD}Step 2/6: Setting up Python environment...${RESET}"
 mkdir -p "$INSTALL_DIR"
 
 # Copy server files
-for f in server.py shared.py config.py voice_registry.py requirements.txt; do
+for f in server.py shared.py config.py voice_registry.py session_registry.py requirements.txt; do
     [ -f "$SCRIPT_DIR/$f" ] && cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/"
 done
 for d in tts stt templates; do
@@ -85,23 +98,88 @@ for d in tts stt templates; do
 done
 ok "Server files copied to $INSTALL_DIR"
 
+# Create or validate venv
 if [ -f "$VENV_DIR/bin/python3" ]; then
-    ok "Existing venv found"
-else
+    if "$VENV_DIR/bin/python3" --version &>/dev/null; then
+        ok "Existing venv found ($("$VENV_DIR/bin/python3" --version 2>&1))"
+    else
+        warn "Existing venv is broken, recreating..."
+        rm -rf "$VENV_DIR"
+    fi
+fi
+
+if [ ! -f "$VENV_DIR/bin/python3" ]; then
     action "Creating Python virtual environment..."
     "$PYTHON" -m venv "$VENV_DIR"
     echo -e "\r  ${GREEN}✓${RESET} Created venv at $VENV_DIR"
 fi
 
-action "Installing Python packages..."
-"$VENV_DIR/bin/pip" install --quiet -r "$INSTALL_DIR/requirements.txt"
-echo -e "\r  ${GREEN}✓${RESET} All packages installed"
+# Smart package install — only install what's missing
+MISSING_PKGS=()
+check_pkg() {
+    local import_name="$1" pip_name="$2"
+    if ! "$VENV_DIR/bin/python3" -c "import $import_name" &>/dev/null; then
+        MISSING_PKGS+=("$pip_name")
+    fi
+}
 
+check_pkg "kokoro_onnx" "kokoro-onnx"
+check_pkg "faster_whisper" "faster-whisper"
+check_pkg "soundfile" "soundfile"
+check_pkg "sounddevice" "sounddevice"
+check_pkg "mcp" "mcp[cli]"
+check_pkg "numpy" "numpy"
+check_pkg "silero_vad" "silero-vad"
+
+if [ ${#MISSING_PKGS[@]} -eq 0 ]; then
+    ok "All Python packages already installed"
+else
+    action "Installing ${MISSING_PKGS[*]}..."
+    "$VENV_DIR/bin/pip" install --quiet "${MISSING_PKGS[@]}"
+    echo -e "\r  ${GREEN}✓${RESET} All packages installed"
+fi
+
+# Create or merge config.json
 if [ ! -f "$INSTALL_DIR/config.json" ]; then
     [ -f "$SCRIPT_DIR/config.json" ] && cp "$SCRIPT_DIR/config.json" "$INSTALL_DIR/"
     ok "Default config.json created"
 else
-    ok "config.json already exists"
+    # Merge new default keys into existing config without overwriting user values
+    if [ -f "$SCRIPT_DIR/config.json" ]; then
+        merge_result=$("$VENV_DIR/bin/python3" -c "
+import json
+
+with open('$INSTALL_DIR/config.json') as f:
+    existing = json.load(f)
+with open('$SCRIPT_DIR/config.json') as f:
+    defaults = json.load(f)
+
+updated = False
+for key, val in defaults.items():
+    if key not in existing:
+        existing[key] = val
+        updated = True
+    elif isinstance(val, dict):
+        for sub_key, sub_val in val.items():
+            if sub_key not in existing[key]:
+                existing[key][sub_key] = sub_val
+                updated = True
+
+if updated:
+    with open('$INSTALL_DIR/config.json', 'w') as f:
+        json.dump(existing, f, indent=2)
+    print('updated')
+else:
+    print('current')
+" 2>/dev/null)
+        if [ "$merge_result" = "updated" ]; then
+            ok "config.json updated with new defaults"
+        else
+            ok "config.json already up to date"
+        fi
+    else
+        ok "config.json already exists"
+    fi
 fi
 
 # ─── Step 3: Models ──────────────────────────────────────────────────────
@@ -143,27 +221,73 @@ info "whisper-base model (~150MB) will download automatically on first use"
 # ─── Step 4: MCP config ─────────────────────────────────────────────────
 echo -e "\n${BOLD}Step 4/6: Configuring MCP server...${RESET}"
 
-MCP_CONFIG="$HOME/.claude.json"
+# Auto-detect IDEs if no flags given
+if [ ${#TARGET_IDES[@]} -eq 0 ]; then
+    [ -d "$HOME/.claude" ] && TARGET_IDES+=("claude")
+    [ -d "$HOME/.cursor" ] && TARGET_IDES+=("cursor")
+    [ -d "$HOME/.codex" ]  && TARGET_IDES+=("codex")
 
-if [ -f "$MCP_CONFIG" ] && grep -q "agent-voice" "$MCP_CONFIG" 2>/dev/null; then
-    ok "agent-voice already configured in ~/.claude.json"
-else
-    # Create or merge ~/.claude.json
-    if [ -f "$MCP_CONFIG" ]; then
+    # If nothing detected, prompt
+    if [ ${#TARGET_IDES[@]} -eq 0 ]; then
+        echo -e "\n  Which IDE(s) are you using?"
+        echo "    1) Claude Code"
+        echo "    2) Cursor"
+        echo "    3) Codex (OpenAI)"
+        echo "    4) All of the above"
+        echo ""
+        read -rp "  Select (1-4, or comma-separated like 1,2): " ide_choice
+        IFS=',' read -ra choices <<< "$ide_choice"
+        for c in "${choices[@]}"; do
+            c=$(echo "$c" | tr -d ' ')
+            case "$c" in
+                1) TARGET_IDES+=("claude") ;;
+                2) TARGET_IDES+=("cursor") ;;
+                3) TARGET_IDES+=("codex") ;;
+                4) TARGET_IDES=("claude" "cursor" "codex") ;;
+            esac
+        done
+        [ ${#TARGET_IDES[@]} -eq 0 ] && TARGET_IDES=("claude")
+    else
+        ide_names=""
+        for ide in "${TARGET_IDES[@]}"; do
+            case "$ide" in
+                claude) ide_names+="Claude Code, " ;;
+                cursor) ide_names+="Cursor, " ;;
+                codex)  ide_names+="Codex, " ;;
+            esac
+        done
+        info "Detected: ${ide_names%, }"
+    fi
+fi
+
+# MCP server entry (same for all IDEs)
+MCP_ENTRY="{\"command\": \"$VENV_DIR/bin/python3\", \"args\": [\"$INSTALL_DIR/server.py\"]}"
+
+configure_mcp() {
+    local config_path="$1" ide_name="$2"
+
+    if [ -f "$config_path" ] && grep -q "agent-voice" "$config_path" 2>/dev/null; then
+        ok "$ide_name: already configured"
+        return
+    fi
+
+    mkdir -p "$(dirname "$config_path")"
+
+    if [ -f "$config_path" ]; then
         "$VENV_DIR/bin/python3" -c "
 import json
-with open('$MCP_CONFIG') as f:
+with open('$config_path') as f:
     config = json.load(f)
 config.setdefault('mcpServers', {})
 config['mcpServers']['agent-voice'] = {
     'command': '$VENV_DIR/bin/python3',
     'args': ['$INSTALL_DIR/server.py']
 }
-with open('$MCP_CONFIG', 'w') as f:
+with open('$config_path', 'w') as f:
     json.dump(config, f, indent=2)
 "
     else
-        cat > "$MCP_CONFIG" << MCPEOF
+        cat > "$config_path" << MCPEOF
 {
   "mcpServers": {
     "agent-voice": {
@@ -174,7 +298,33 @@ with open('$MCP_CONFIG', 'w') as f:
 }
 MCPEOF
     fi
-    ok "Added agent-voice to ~/.claude.json"
+    ok "$ide_name: added to $config_path"
+}
+
+for ide in "${TARGET_IDES[@]}"; do
+    case "$ide" in
+        claude) configure_mcp "$HOME/.claude.json" "Claude Code" ;;
+        cursor) configure_mcp "$HOME/.cursor/mcp.json" "Cursor" ;;
+        codex)  configure_mcp "$HOME/.codex/mcp.json" "Codex" ;;
+    esac
+done
+
+# Clean up legacy ~/.claude/mcp.json
+LEGACY_MCP="$HOME/.claude/mcp.json"
+if [ -f "$LEGACY_MCP" ] && grep -q "agent-voice" "$LEGACY_MCP" 2>/dev/null; then
+    "$VENV_DIR/bin/python3" -c "
+import json, os
+with open('$LEGACY_MCP') as f:
+    data = json.load(f)
+if 'mcpServers' in data and 'agent-voice' in data['mcpServers']:
+    del data['mcpServers']['agent-voice']
+    if not data['mcpServers']:
+        os.unlink('$LEGACY_MCP')
+    else:
+        with open('$LEGACY_MCP', 'w') as f:
+            json.dump(data, f, indent=2)
+" 2>/dev/null
+    info "Cleaned up legacy ~/.claude/mcp.json"
 fi
 
 # ─── Step 5: Microphone ─────────────────────────────────────────────────
@@ -202,30 +352,136 @@ fi
 # ─── Step 6: Voice rules ────────────────────────────────────────────────
 echo -e "\n${BOLD}Step 6/6: Setting up voice rules...${RESET}"
 
-VOICE_RULES="$HOME/.claude/agents/voice-rules.md"
-mkdir -p "$(dirname "$VOICE_RULES")"
+# Voice picker
+echo -e "\n  ${BOLD}Choose your main agent voice:${RESET}"
+VOICES=(
+    "am_eric:Eric:male, American, confident"
+    "af_nova:Nova:female, American, clear"
+    "am_onyx:Onyx:male, American, deep"
+    "am_adam:Adam:male, American, neutral"
+    "af_heart:Heart:female, American, warm"
+    "am_fenrir:Fenrir:male, American, bold"
+    "bf_emma:Emma:female, British, polished"
+    "bm_george:George:male, British, classic"
+)
 
-if [ -f "$VOICE_RULES" ]; then
-    ok "voice-rules.md already exists"
+for i in "${!VOICES[@]}"; do
+    IFS=':' read -r vid vname vdesc <<< "${VOICES[$i]}"
+    echo -e "    $((i+1))) $vname ${DIM}($vid — $vdesc)${RESET}"
+done
+echo -e "    $((${#VOICES[@]}+1))) Enter a custom voice ID"
+echo ""
+
+read -rp "  Select (1-$((${#VOICES[@]}+1))): " voice_choice
+voice_choice=${voice_choice:-1}
+
+if [ "$voice_choice" -ge 1 ] && [ "$voice_choice" -le "${#VOICES[@]}" ] 2>/dev/null; then
+    IFS=':' read -r CHOSEN_VOICE_ID MAIN_AGENT _ <<< "${VOICES[$((voice_choice-1))]}"
+elif [ "$voice_choice" = "$((${#VOICES[@]}+1))" ]; then
+    read -rp "  Enter voice ID (e.g., af_bella): " CHOSEN_VOICE_ID
+    # Capitalize the name part (after the prefix)
+    MAIN_AGENT=$(echo "$CHOSEN_VOICE_ID" | sed 's/^[a-z]*_//' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
 else
-    src="$INSTALL_DIR/templates/voice-rules.md"
-    [ ! -f "$src" ] && src="$SCRIPT_DIR/templates/voice-rules.md"
-    if [ -f "$src" ]; then
-        cp "$src" "$VOICE_RULES"
-        ok "Voice rules saved to ~/.claude/agents/voice-rules.md"
-    else
-        warn "voice-rules.md template not found"
-    fi
+    # Default to Eric
+    CHOSEN_VOICE_ID="am_eric"
+    MAIN_AGENT="Eric"
 fi
 
-if [ -f "$HOME/.claude/CLAUDE.md" ]; then
-    if grep -q "voice-rules" "$HOME/.claude/CLAUDE.md" 2>/dev/null; then
-        ok "CLAUDE.md already references voice-rules.md"
+ok "Main agent voice: $MAIN_AGENT ($CHOSEN_VOICE_ID)"
+
+# Update config.json with chosen voice
+if [ -f "$INSTALL_DIR/config.json" ]; then
+    "$VENV_DIR/bin/python3" -c "
+import json
+with open('$INSTALL_DIR/config.json') as f:
+    config = json.load(f)
+config['tts']['default_voice'] = '$CHOSEN_VOICE_ID'
+config['main_agent'] = '$MAIN_AGENT'
+with open('$INSTALL_DIR/config.json', 'w') as f:
+    json.dump(config, f, indent=2)
+" 2>/dev/null
+fi
+
+# Generate voice rules block from template
+src="$INSTALL_DIR/templates/voice-rules.md"
+[ ! -f "$src" ] && src="$SCRIPT_DIR/templates/voice-rules.md"
+
+if [ -f "$src" ]; then
+    RULES_BLOCK=$(sed "s/{{MAIN_AGENT}}/$MAIN_AGENT/g" "$src")
+else
+    warn "voice-rules.md template not found"
+    RULES_BLOCK=""
+fi
+
+# Helper: inject sentinel-based rules into a file (append or replace)
+inject_rules() {
+    local target="$1" label="$2"
+    mkdir -p "$(dirname "$target")"
+    if [ -f "$target" ] && grep -q "$SENTINEL" "$target" 2>/dev/null; then
+        "$VENV_DIR/bin/python3" -c "
+import sys
+sentinel = '$SENTINEL'
+with open('$target') as f:
+    content = f.read()
+idx = content.find(sentinel)
+before = content[:idx] if idx >= 0 else content
+with open('$target', 'w') as f:
+    f.write(before.rstrip() + '\n\n' + sentinel + '\n' + sys.stdin.read())
+" <<< "$RULES_BLOCK"
+        ok "$label voice rules updated"
+    elif [ -f "$target" ]; then
+        printf "\n%s\n%s\n" "$SENTINEL" "$RULES_BLOCK" >> "$target"
+        ok "$label voice rules added"
     else
-        info "Add to your CLAUDE.md: See also: ~/.claude/agents/voice-rules.md"
+        printf "%s\n%s\n" "$SENTINEL" "$RULES_BLOCK" > "$target"
+        ok "$label created with voice rules"
     fi
+}
+
+# Inject rules for each configured IDE
+if [ -n "$RULES_BLOCK" ]; then
+    for ide in "${TARGET_IDES[@]}"; do
+        case "$ide" in
+            claude)
+                inject_rules "$HOME/.claude/CLAUDE.md" "Claude Code:"
+                ;;
+            cursor)
+                CURSOR_RULE="$HOME/.cursor/rules/agent-voice.mdc"
+                mkdir -p "$(dirname "$CURSOR_RULE")"
+                cat > "$CURSOR_RULE" << CURSOREOF
+---
+description: Voice interaction rules for Agent Voice MCP server
+globs:
+alwaysApply: true
+---
+
+$SENTINEL
+# Voice Behavior Rules (Agent Voice MCP)
+
+$RULES_BLOCK
+CURSOREOF
+                ok "Cursor: voice rules written to $CURSOR_RULE"
+                ;;
+            codex)
+                if [ -d "$HOME/.codex" ]; then
+                    inject_rules "$HOME/.codex/AGENTS.md" "Codex:"
+                fi
+                ;;
+        esac
+    done
 fi
 
 # ─── Done ────────────────────────────────────────────────────────────────
-echo -e "\n🎉 ${BOLD}Done!${RESET} Start a new Claude Code session to hear your AI speak."
+ide_names=""
+for ide in "${TARGET_IDES[@]}"; do
+    case "$ide" in
+        claude) ide_names+="Claude Code, " ;;
+        cursor) ide_names+="Cursor, " ;;
+        codex)  ide_names+="Codex, " ;;
+    esac
+done
+ide_names=${ide_names%, }
+
+echo -e "\n🎉 ${BOLD}Done!${RESET} Configured for: ${ide_names:-Claude Code}"
+echo '   Restart your IDE session, then voice tools will be available.'
 echo -e '   Run "npx agent-voice-mcp test" to hear a sample voice.\n'

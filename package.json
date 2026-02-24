@@ -12,7 +12,9 @@
     "config.py",
     "config.json",
     "voice_registry.py",
+    "session_registry.py",
     "requirements.txt",
+    "hooks/",
     "tts/",
     "stt/",
     "templates/"
@@ -30,7 +32,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "https://github.com/shshalom/agent-voice-mcp"
   },
   "engines": {
     "node": ">=16.0.0"

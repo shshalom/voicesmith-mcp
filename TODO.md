@@ -25,7 +25,7 @@
 |---|--------|---------|-------|
 | 7 | 🟢 | Session registry (sessions.json) | With flock, stale PID cleanup, tmux_session field |
 | 8 | 🟢 | Auto-assign different voice for new sessions | If name taken, picks next available Kokoro voice |
-| 9 | 🔴 | Resume with previous voice | When `claude -r` resumes, reclaim the same voice/name. Needs: detect resume, look up persisted registry, register with that name |
+| 9 | 🟢 | Resume with previous voice | Fixed — `set_voice` persists `last_voice_name` to config.json. On startup, server uses it as preferred name instead of main_agent. |
 | 10 | 🟢 | Cross-session audio lock (flock) | Prevents overlapping TTS playback |
 
 ### UX Improvements
@@ -34,7 +34,7 @@
 | 11 | 🔴 | Menu bar indicator for wake listener | Show mic state (active/recording/disabled), click to toggle. Use `rumps` (Python) or native Swift. |
 | 12 | 🟢 | Session preheat / agent intro | AI calls `status` on first response, discovers assigned name, speaks intro. Combined with name discovery. |
 | 13 | 🟢 | Tink ready sound after wake word | Plays before recording starts |
-| 14 | 🔴 | Timeout nudge on listen | After listen timeout, AI speaks "I didn't catch that, go ahead and type it." |
+| 14 | 🟢 | Timeout nudge on listen | Fixed — speak_then_listen speaks "I didn't catch that. Go ahead and type it." on timeout, one nudge only |
 
 ### Installer
 | # | Status | Feature | Notes |
@@ -58,12 +58,12 @@
 | # | Status | Issue | Notes |
 |---|--------|-------|-------|
 | 22 | 🟢 | Multiple sessions competing for mic | Fixed with wake mic flock |
-| 23 | 🔴 | Stale sessions not cleaned up on crash | PID check works but only runs on next startup. Could add periodic cleanup. |
+| 23 | 🟢 | Stale sessions not cleaned up on crash | Fixed — periodic cleanup every 60s via existing save thread calls get_active_sessions() |
 | 24 | 🟢 | tmux_session always null without alias | Fixed — alias sets AGENT_VOICE_TMUX env var |
 | 25 | 🔴 | Wake listener doesn't release mic cleanly when MCP server crashes | flock handles it, but sounddevice stream may leak. OS should clean up on process death. |
-| 26 | 🔴 | No audio cue when AI is listening (speak_then_listen) | Play Tink sound when mic opens for AI-initiated listen, so user knows to speak. Currently only wake word plays Tink. |
-| 27 | 🔴 | Low mic sensitivity / difficulty hearing user | Listen frequently times out. May need: longer timeout, lower VAD threshold, or mic gain adjustment. Investigate root cause. |
-| 28 | 🔴 | tmux may intercept Shift+Return (newline) | Verify if tmux passes Shift+Return through to Claude Code correctly. If not, add tmux.conf key binding passthrough. |
+| 26 | 🟢 | No audio cue when AI is listening (speak_then_listen) | Fixed — Tink plays before mic opens in listen(). Skipped for push-to-talk (has its own beep). |
+| 27 | 🟢 | Low mic sensitivity / difficulty hearing user | Fixed — VAD threshold now configurable via config.json (stt.vad_threshold), default lowered from 0.5 to 0.3 |
+| 28 | 🟢 | tmux may intercept Shift+Return (newline) | Fixed — added `extended-keys on` + `csi-u` format to tmux.conf. Also changed prefix from C-b to C-] to avoid key conflicts, added clipboard/focus/passthrough settings. |
 
 ---
 

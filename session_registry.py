@@ -10,6 +10,7 @@ import json
 import os
 import signal
 import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -58,30 +59,122 @@ def _write_sessions(path: Path, sessions: list[dict]) -> None:
         json.dump({"sessions": sessions}, f, indent=2)
 
 
+# Max seconds since last MCP tool call before considering a session stale.
+# If a server hasn't had any tool calls in this time, it's likely orphaned
+# (MCP client disconnected but process is still running).
+_STALE_ACTIVITY_THRESHOLD = 300  # 5 minutes
+
+
+def _session_healthy(session: dict) -> bool:
+    """Check if a session is alive and actively used.
+
+    Three checks:
+    1. PID alive (fast, catches crashed processes)
+    2. HTTP health check on /status (catches completely dead servers)
+    3. Activity check — if last_tool_call_age_s exceeds threshold, the server
+       is alive but orphaned (no MCP client connected)
+    """
+    pid = session.get("pid", 0)
+    if not _pid_alive(pid):
+        return False
+
+    # Skip further checks for our own PID (we know we're alive)
+    if pid == os.getpid():
+        return True
+
+    port = session.get("port")
+    if not port:
+        return False
+
+    try:
+        url = f"http://127.0.0.1:{port}/status"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read())
+            if not data.get("ready", False):
+                raise ValueError("not ready")
+
+            # Check activity age — if server hasn't had MCP tool calls
+            # in a while, it's orphaned
+            age = data.get("last_tool_call_age_s")
+            if age is not None and age > _STALE_ACTIVITY_THRESHOLD:
+                logger.info(
+                    f"Session '{session.get('name')}' (pid {pid}) inactive "
+                    f"for {age}s — treating as stale"
+                )
+                raise ValueError("inactive")
+
+            return True
+    except Exception:
+        # Server not responding or inactive — it's orphaned
+        logger.info(f"Session '{session.get('name')}' (pid {pid}) stale on port {port}")
+        # Kill the orphaned process
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.info(f"Sent SIGTERM to orphaned process {pid}")
+        except OSError:
+            pass
+        return False
+
+
 def _clean_stale(sessions: list[dict]) -> list[dict]:
-    """Remove sessions whose PID is no longer alive."""
+    """Remove sessions that are dead or unresponsive."""
     alive = []
     for s in sessions:
-        if _pid_alive(s.get("pid", 0)):
+        if _session_healthy(s):
             alive.append(s)
         else:
             logger.info(f"Removed stale session: {s.get('name')} (pid {s.get('pid')})")
     return alive
 
 
+# Voice name priority: American English first, then British, then the rest.
+# Within each group, order is curated (not alphabetical).
+_VOICE_PRIORITY = [
+    # American English - Male
+    ("adam", "am_adam"), ("echo", "am_echo"), ("eric", "am_eric"),
+    ("fenrir", "am_fenrir"), ("liam", "am_liam"), ("michael", "am_michael"),
+    ("onyx", "am_onyx"), ("puck", "am_puck"),
+    # American English - Female
+    ("nova", "af_nova"), ("bella", "af_bella"), ("heart", "af_heart"),
+    ("jessica", "af_jessica"), ("nicole", "af_nicole"), ("river", "af_river"),
+    ("sarah", "af_sarah"), ("sky", "af_sky"), ("alloy", "af_alloy"),
+    ("aoede", "af_aoede"), ("kore", "af_kore"),
+    # British English - Male
+    ("daniel", "bm_daniel"), ("fable", "bm_fable"),
+    ("george", "bm_george"), ("lewis", "bm_lewis"),
+    # British English - Female
+    ("alice", "bf_alice"), ("emma", "bf_emma"),
+    ("isabella", "bf_isabella"), ("lily", "bf_lily"),
+    # Everything else (Spanish, French, Hindi, Italian, Japanese, etc.)
+    ("alex", "em_alex"), ("dora", "ef_dora"), ("siwis", "ff_siwis"),
+    ("alpha", "hf_alpha"), ("beta", "hf_beta"), ("omega", "hm_omega"),
+    ("psi", "hm_psi"), ("sara", "if_sara"), ("nicola", "im_nicola"),
+    ("gongitsune", "jf_gongitsune"), ("nezumi", "jf_nezumi"),
+    ("tebukuro", "jf_tebukuro"), ("kumo", "jm_kumo"),
+    ("xiaobei", "zf_xiaobei"), ("xiaoni", "zf_xiaoni"),
+    ("xiaoxiao", "zf_xiaoxiao"), ("xiaoyi", "zf_xiaoyi"),
+    ("yunjian", "zm_yunjian"), ("yunxi", "zm_yunxi"),
+    ("yunxia", "zm_yunxia"), ("yunyang", "zm_yunyang"),
+    # Santa voices last (novelty)
+    ("santa", "am_santa"),
+]
+
+
 def _find_available_name(taken_names: set[str], preferred: str) -> tuple[str, str]:
     """Find an available voice name.
 
     Returns (name, voice_id). Tries the preferred name first,
-    then picks from Kokoro voice names not already taken.
+    then picks from the priority-ordered voice list (American English first,
+    then British English, then everything else).
     """
     # Try preferred name
     preferred_lower = preferred.lower()
     if preferred not in taken_names and preferred_lower in VOICE_NAME_MAP:
         return preferred, VOICE_NAME_MAP[preferred_lower]
 
-    # Pick the next available Kokoro voice name
-    for name_lower, voice_id in sorted(VOICE_NAME_MAP.items()):
+    # Pick the first available name from the priority list
+    for name_lower, voice_id in _VOICE_PRIORITY:
         name = name_lower.capitalize()
         if name not in taken_names:
             return name, voice_id

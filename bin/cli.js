@@ -33,7 +33,6 @@ ${BOLD}Install Options:${RESET}
   --cursor    Configure for Cursor
   --codex     Configure for Codex (OpenAI)
   --all       Configure for all supported IDEs
-  --with-voice-wake  Enable wake word detection ("Hey listen")
 
 ${BOLD}Examples:${RESET}
   npx agent-voice-mcp install              ${DIM}# Auto-detect IDEs${RESET}

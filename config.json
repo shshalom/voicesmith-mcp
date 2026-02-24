@@ -10,9 +10,11 @@
     "model_size": "base",
     "language": "en",
     "silence_threshold": 1.5,
-    "max_listen_timeout": 15
+    "max_listen_timeout": 15,
+    "vad_threshold": 0.3
   },
   "main_agent": "Eric",
+  "last_voice_name": null,
   "voice_registry": {},
   "log_level": "info",
   "log_file": false,

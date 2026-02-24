@@ -1,13 +1,13 @@
 #!/bin/bash
 # Voice Input — triggered by macOS Voice Control "Hey listen"
 #
-# Reads active sessions, records speech via MCP server HTTP endpoint,
-# parses the agent name from the first word, and pastes the text
-# into the frontmost app.
+# Pauses Voice Control (to release the mic), records speech via the
+# MCP server's HTTP endpoint (Whisper STT), then resumes Voice Control
+# and pastes the transcribed text into the frontmost app.
 #
 # Usage: ./voice-input.sh
 # Setup: Add "Hey listen" as a macOS Voice Control custom command
-#        that runs this script via an Automator workflow.
+#        that runs this script via a Shortcut.
 
 set -euo pipefail
 
@@ -19,6 +19,32 @@ READY_SOUND="/System/Library/Sounds/Tink.aiff"
 notify() {
     osascript -e "display notification \"$1\" with title \"Agent Voice\""
 }
+
+pause_voice_control() {
+    # Temporarily disable Voice Control to release the mic
+    osascript -e '
+        tell application "System Events"
+            set value of attribute "AXValue" of checkbox 1 of group 1 of window 1 of application process "System Settings" to 0
+        end tell
+    ' 2>/dev/null || \
+    defaults write com.apple.Accessibility CommandAndControlEnabled -bool false 2>/dev/null || true
+    # Give the system a moment to release the mic
+    sleep 0.5
+}
+
+resume_voice_control() {
+    # Re-enable Voice Control
+    defaults write com.apple.Accessibility CommandAndControlEnabled -bool true 2>/dev/null || true
+    # Trigger a refresh by poking the accessibility service
+    osascript -e 'tell application "System Events" to key code 63' 2>/dev/null || true
+}
+
+# ─── Pause Voice Control ────────────────────────────────────────────────────
+
+pause_voice_control
+
+# Ensure Voice Control gets re-enabled even if we crash
+trap resume_voice_control EXIT
 
 # ─── Find Active Sessions ────────────────────────────────────────────────────
 
@@ -60,8 +86,6 @@ if [ "$session_count" -eq 1 ]; then
     target_port=$(echo "$sessions" | cut -d: -f2)
 else
     # Multiple sessions — we'll record first, then parse the name
-    # For now, use the first (most recently started) session to record
-    # We'll parse the name from the transcription afterward
     target_port=$(echo "$sessions" | tail -1 | cut -d: -f2)
 fi
 
@@ -126,13 +150,16 @@ if [ "$session_count" -gt 1 ]; then
             break
         fi
     done <<< "$sessions"
-
-    # If no name matched, use the last (most recent) session
-    if [ -z "$matched_port" ]; then
-        # Keep full text, route to most recent
-        :
-    fi
 fi
+
+# ─── Resume Voice Control Before Injecting Text ─────────────────────────────
+
+# Resume VC early so the trap doesn't double-fire
+resume_voice_control
+trap - EXIT
+
+# Small delay to let VC fully restart before we type
+sleep 0.3
 
 # ─── Inject Text into Frontmost App ─────────────────────────────────────────
 

@@ -115,6 +115,7 @@ async function step2_pythonEnv(python) {
     "shared.py",
     "config.py",
     "voice_registry.py",
+    "session_registry.py",
     "requirements.txt",
   ];
   const serverDirs = ["tts", "stt", "templates"];
@@ -204,15 +205,47 @@ async function step2_pythonEnv(python) {
     }
   }
 
-  // Copy default config if not present
+  // Create or merge config.json — on upgrade, add new fields without
+  // overwriting the user's existing values.
+  const configSrc = path.join(PKG_DIR, "config.json");
   if (!fileExists(CONFIG_FILE)) {
-    const src = path.join(PKG_DIR, "config.json");
-    if (fileExists(src)) {
-      fs.copyFileSync(src, CONFIG_FILE);
+    if (fileExists(configSrc)) {
+      fs.copyFileSync(configSrc, CONFIG_FILE);
       logOk("Default config.json created");
     }
   } else {
-    logOk("config.json already exists");
+    // Merge: add missing keys from defaults, preserve existing values
+    try {
+      const existing = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+      const defaults = fileExists(configSrc)
+        ? JSON.parse(fs.readFileSync(configSrc, "utf8"))
+        : {};
+
+      let updated = false;
+      for (const [key, val] of Object.entries(defaults)) {
+        if (!(key in existing)) {
+          existing[key] = val;
+          updated = true;
+        } else if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+          // Merge nested objects (e.g., stt, tts, wake_word)
+          for (const [subKey, subVal] of Object.entries(val)) {
+            if (!(subKey in existing[key])) {
+              existing[key][subKey] = subVal;
+              updated = true;
+            }
+          }
+        }
+      }
+
+      if (updated) {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(existing, null, 2) + "\n");
+        logOk("config.json updated with new defaults");
+      } else {
+        logOk("config.json already up to date");
+      }
+    } catch {
+      logOk("config.json already exists");
+    }
   }
 }
 
@@ -622,7 +655,6 @@ async function run() {
   // Parse flags from argv
   const args = process.argv.slice(3);
   const targetIdes = parseIdeFlags(args);
-  const withVoiceWake = args.includes("--with-voice-wake");
 
   const python = await step1_systemDeps();
   await step2_pythonEnv(python);
@@ -631,21 +663,14 @@ async function run() {
   await step5_microphone();
   await step6_voiceRules(configuredIdes);
 
-  if (withVoiceWake) {
-    await setupWakeWord();
-  }
-
   const ideNames = (configuredIdes || [])
     .map((k) => IDE_CONFIGS[k]?.name || k)
     .join(", ");
 
   console.log(
-    `\n🎉 ${BOLD}Done!${RESET} Configured for: ${ideNames || "Claude Code"}${withVoiceWake ? " (with voice wake)" : ""}`
+    `\n🎉 ${BOLD}Done!${RESET} Configured for: ${ideNames || "Claude Code"}`
   );
   console.log('   Restart your IDE session, then voice tools will be available.');
-  if (withVoiceWake) {
-    console.log('   Open a new terminal for the claude alias to take effect.');
-  }
   console.log('   Run "npx agent-voice-mcp test" to hear a sample voice.\n');
 }
 

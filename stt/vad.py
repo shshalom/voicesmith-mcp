@@ -20,12 +20,13 @@ class VoiceActivityDetector:
     Each 512-sample chunk gets a 64-sample context prepended (from the previous chunk).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, threshold: float = 0.3) -> None:
         self._loaded = False
         self._session = None
         self._state = None
         self._sr = None
         self._context = None
+        self._threshold = threshold
 
         try:
             import onnxruntime as ort
@@ -37,7 +38,7 @@ class VoiceActivityDetector:
             self._session = ort.InferenceSession(model_path)
             self.reset()
             self._loaded = True
-            logger.info(f"Silero VAD loaded (ONNX) from {model_path}")
+            logger.info(f"Silero VAD loaded (ONNX) from {model_path}, threshold={threshold}")
         except VADError:
             raise
         except Exception as e:
@@ -65,7 +66,7 @@ class VoiceActivityDetector:
 
     def is_speech(self, chunk: bytes | np.ndarray) -> bool:
         """Return True if speech is detected in the audio chunk."""
-        return self.speech_probability(chunk) > 0.5
+        return self.speech_probability(chunk) > self._threshold
 
     def speech_probability(self, chunk: bytes | np.ndarray) -> float:
         """Return speech probability for the audio chunk.

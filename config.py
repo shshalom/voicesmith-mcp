@@ -34,6 +34,7 @@ class STTConfig:
     language: str = "en"
     silence_threshold: float = 1.5
     max_listen_timeout: float = 15
+    vad_threshold: float = 0.3
 
 
 @dataclass
@@ -52,6 +53,7 @@ class AppConfig:
     stt: STTConfig = field(default_factory=STTConfig)
     wake_word: WakeWordConfig = field(default_factory=WakeWordConfig)
     main_agent: str = "Eric"
+    last_voice_name: Optional[str] = None
     voice_registry: dict[str, str] = field(default_factory=dict)
     log_level: str = "info"
     log_file: bool = False
@@ -109,10 +111,14 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
                     config.stt.silence_threshold = float(stt["silence_threshold"])
                 if "max_listen_timeout" in stt:
                     config.stt.max_listen_timeout = float(stt["max_listen_timeout"])
+                if "vad_threshold" in stt:
+                    config.stt.vad_threshold = float(stt["vad_threshold"])
 
             # Top-level config
             if "main_agent" in data:
                 config.main_agent = data["main_agent"]
+            if "last_voice_name" in data:
+                config.last_voice_name = data["last_voice_name"]
             if "voice_registry" in data:
                 config.voice_registry = dict(data["voice_registry"])
             if "log_level" in data:
@@ -179,8 +185,10 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
             "language": config.stt.language,
             "silence_threshold": config.stt.silence_threshold,
             "max_listen_timeout": config.stt.max_listen_timeout,
+            "vad_threshold": config.stt.vad_threshold,
         },
         "main_agent": config.main_agent,
+        "last_voice_name": config.last_voice_name,
         "voice_registry": config.voice_registry,
         "log_level": config.log_level,
         "log_file": config.log_file,
