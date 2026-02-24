@@ -1,4 +1,8 @@
-# Agent Voice MCP
+<p align="center">
+  <img src="header.png" alt="VoiceSmith MCP" width="600">
+</p>
+
+# VoiceSmith MCP
 
 Local AI voice for coding assistants. Gives your AI a real voice (text-to-speech) and ears (speech-to-text) via the Model Context Protocol (MCP). Fully offline — no cloud APIs, no data leaves your machine.
 
