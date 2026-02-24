@@ -206,7 +206,8 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(400, {"error": "invalid_json"})
             return
 
-        name = params.get("name", _session_info.get("name", "Eric") if _session_info else "Eric")
+        default_name = _config.main_agent if _config else "Eric"
+        name = params.get("name", _session_info.get("name", default_name) if _session_info else default_name)
         text = params.get("text", "")
         speed = params.get("speed", 1.0)
 
@@ -806,12 +807,28 @@ def main():
 
 
 def _start_preheat_intro():
-    """Speak a brief intro after server starts. Preheats TTS engine."""
+    """Speak a brief intro after server starts. Preheats TTS engine.
+
+    Only speaks if this session got its preferred name. If the preferred name
+    was taken (e.g., during a session resume where the old server is still
+    running), skip the intro to avoid confusing double introductions.
+    """
     if _tts_engine is None or _audio_player is None:
         return
 
-    name = _session_info.get("name", "Eric") if _session_info else "Eric"
-    voice = _session_info.get("voice", "am_eric") if _session_info else "am_eric"
+    default_name = _config.main_agent if _config else "Eric"
+    default_voice = _config.tts.default_voice if _config else "am_eric"
+
+    name = _session_info.get("name", default_name) if _session_info else default_name
+    voice = _session_info.get("voice", default_voice) if _session_info else default_voice
+
+    # Determine what name we wanted
+    preferred = (_config.last_voice_name or default_name) if _config else default_name
+
+    # Skip intro if we didn't get our preferred name — another session has it
+    if name != preferred:
+        logger.info(f"Skipping preheat intro: wanted '{preferred}' but got '{name}'")
+        return
 
     def _intro():
         # Wait for server to settle
