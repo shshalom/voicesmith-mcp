@@ -32,39 +32,50 @@ Restart your IDE session after installing. The AI will greet you by voice on the
 
 ## Usage
 
-**Everything works out of the box.** After installing, just start a session — the AI speaks automatically. No configuration needed.
+> [!NOTE]
+> **Everything works out of the box.** After installing, just start a session — the AI speaks automatically. No configuration needed. The installer sets up voice behavior rules that teach the AI when and how to use its voice.
 
-The installer sets up voice behavior rules that teach the AI when and how to use its voice:
-- Opens with a brief spoken acknowledgment when you give it a task
-- Closes with a spoken summary when it's done
-- Asks questions out loud and listens for your voice response
-- Falls back to text if voice tools aren't available
+What the AI does automatically:
+
+| Moment | What happens |
+|--------|-------------|
+| You give it a task | Speaks a brief acknowledgment |
+| It finishes work | Speaks a summary of what was done |
+| It has a question | Asks out loud, then listens for your voice response |
+| Voice tools unavailable | Falls back to text silently |
+
+---
 
 ### Changing Voices Mid-Session
 
 Ask the AI to switch voices at any time:
 
-> "Switch to Nova"
+> *"Switch to Nova"*
 
-If the voice is available, the AI will switch immediately. If it's occupied by another session, the AI will tell you and show available alternatives.
+If the voice is available, the AI switches immediately. If it's occupied by another session, the AI will tell you and show available alternatives.
 
-You can also browse all 54 voices:
+Browse all 54 voices:
 
-> "Show me the available voices"
+> *"Show me the available voices"*
 
-Or run `npx voicesmith-mcp voices` in a terminal to preview them.
+Or preview them in a terminal: `npx voicesmith-mcp voices`
+
+---
 
 ### Voice Persistence
 
-When you switch voices, the choice is saved. Next time you start or resume a session, the AI will use the same voice — no need to switch again.
+> [!TIP]
+> When you switch voices, the choice is saved automatically. Next time you start or resume a session, the AI uses the same voice — no need to switch again.
+
+---
 
 ### Muting
 
-In a meeting or shared space? Ask the AI to mute:
+In a meeting or shared space? Just ask:
 
-> "Mute the voice"
+> *"Mute the voice"*
 
-The AI continues working normally — it just won't play audio. Say "unmute" when you're ready.
+The AI continues working normally — it just won't play audio. Say *"unmute"* when you're ready.
 
 ## Alternative Install
 
