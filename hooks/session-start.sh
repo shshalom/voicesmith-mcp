@@ -38,7 +38,16 @@ try:
                 raise SystemExit
         except (OSError, ProcessLookupError):
             pass
-    # Fallback: most recent alive session
+    # Prefer the most recent session without a session_id (just registered, waiting for hook)
+    for s in reversed(data.get('sessions', [])):
+        try:
+            os.kill(s['pid'], 0)
+            if not s.get('session_id'):
+                print(s['port'])
+                raise SystemExit
+        except (OSError, ProcessLookupError):
+            pass
+    # Final fallback: most recent alive session
     for s in reversed(data.get('sessions', [])):
         try:
             os.kill(s['pid'], 0)
@@ -51,11 +60,17 @@ except:
 " 2>/dev/null)
 
     # Send session_id to the server if we have both port and session_id
+    # Retry up to 3 times — the HTTP listener may not be ready yet
     if [ -n "$PORT" ] && [ -n "$SESSION_ID" ]; then
-        RESPONSE=$(curl -s --max-time 3 -X POST \
-            -H "Content-Type: application/json" \
-            -d "{\"session_id\": \"$SESSION_ID\"}" \
-            "http://127.0.0.1:$PORT/session" 2>/dev/null)
+        RESPONSE=""
+        for attempt in 1 2 3; do
+            RESPONSE=$(curl -s --max-time 3 -X POST \
+                -H "Content-Type: application/json" \
+                -d "{\"session_id\": \"$SESSION_ID\"}" \
+                "http://127.0.0.1:$PORT/session" 2>/dev/null)
+            [ -n "$RESPONSE" ] && break
+            sleep 0.5
+        done
 
         if [ -n "$RESPONSE" ]; then
             SESSION_NAME=$(echo "$RESPONSE" | python3 -c "
