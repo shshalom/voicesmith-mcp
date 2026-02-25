@@ -11,7 +11,7 @@ Local AI voice for coding assistants. Gives your AI a real voice (text-to-speech
 - **54 distinct voices** via Kokoro ONNX (local TTS, ~300MB model)
 - **Speech-to-text** via faster-whisper (local STT, ~150MB model)
 - **Voice activity detection** via Silero VAD (local, 2MB)
-- **Multi-session support** — run multiple IDE sessions, each with its own voice
+- **Multi-session support** — run multiple Claude Code sessions, each with its own voice (single session for Cursor/Codex)
 - **Works with Claude Code, Cursor, and Codex**
 
 ## Quick Start
@@ -69,7 +69,11 @@ The MCP server runs as a local process alongside your IDE. It communicates over 
 
 ## Multi-Session
 
-Multiple IDE sessions can run simultaneously. Each gets a unique voice name and HTTP port. Session coordination uses a shared registry (`sessions.json`) with file locking. Cross-session audio is serialized via `flock` to prevent overlapping playback.
+**Claude Code:** Full multi-session support. Multiple Claude Code sessions can run simultaneously, each with its own voice. Session identity is tracked via Claude's `session_id` — resuming a session reclaims the same voice, and multiple terminals sharing the same session share the same voice. Orphaned servers are detected and cleaned up automatically.
+
+**Cursor / Codex:** Single session only. Cursor runs one MCP server per config (shared across tabs), and Codex has no multi-session hooks. Voice works normally — just no multi-session coordination.
+
+Cross-session audio is serialized via `flock` to prevent overlapping playback.
 
 ## Configuration
 
@@ -102,11 +106,11 @@ Re-run `npx voicesmith-mcp install` to change your voice or update settings. Exi
 
 ## Supported IDEs
 
-| IDE | Config Location | Rules Location |
-|-----|----------------|----------------|
-| Claude Code | `~/.claude.json` | `~/.claude/CLAUDE.md` |
-| Cursor | `~/.cursor/mcp.json` | `~/.cursor/rules/voicesmith.mdc` |
-| Codex | `~/.codex/mcp.json` | `~/.codex/AGENTS.md` |
+| IDE | Config Location | Rules Location | Multi-Session |
+|-----|----------------|----------------|---------------|
+| Claude Code | `~/.claude.json` | `~/.claude/CLAUDE.md` | Yes (via session_id) |
+| Cursor | `~/.cursor/mcp.json` | `~/.cursor/rules/voicesmith.mdc` | No (single server) |
+| Codex | `~/.codex/mcp.json` | `~/.codex/AGENTS.md` | No (single session) |
 
 ## Uninstall
 

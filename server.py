@@ -175,6 +175,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
                 "ready": True,
                 "name": _session_info.get("name") if _session_info else None,
                 "port": _session_info.get("port") if _session_info else None,
+                "session_id": _session_info.get("session_id") if _session_info else None,
                 "mcp_connected": _event_loop is not None,
                 "uptime_s": round(time.time() - _startup_time),
                 "last_tool_call_age_s": round(time.time() - _last_tool_call),
@@ -191,8 +192,37 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             self._handle_listen()
         elif self.path == "/speak":
             self._handle_speak()
+        elif self.path == "/session":
+            self._handle_session_update()
         else:
             self.send_error(404)
+
+    def _handle_session_update(self):
+        """Receive session_id from the SessionStart hook and reconcile voice."""
+        global _session_info
+
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+            params = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self._json_response(400, {"error": "invalid_json"})
+            return
+
+        session_id = params.get("session_id")
+        if not session_id:
+            self._json_response(400, {"error": "missing_session_id"})
+            return
+
+        from session_registry import update_session_id
+        updated = update_session_id(os.getpid(), session_id)
+
+        if updated:
+            _session_info = updated
+            logger.info(f"Session updated: session_id={session_id}, name={updated['name']}")
+            self._json_response(200, {"success": True, "session": updated})
+        else:
+            self._json_response(404, {"error": "session_not_found"})
 
     def _handle_speak(self):
         """Synthesize and play speech via HTTP. Used by SessionStart hook for preheat intro."""
@@ -833,12 +863,17 @@ def _start_preheat_intro():
         return
 
     def _intro():
-        # Wait for server to settle
+        # Wait for server to settle — also gives the SessionStart hook
+        # time to fire and update _session_info with session_id and
+        # possibly a different name (multi-terminal sibling reconciliation)
         time.sleep(1.5)
+        # Re-read _session_info in case the hook updated it during the sleep
+        intro_name = _session_info.get("name", default_name) if _session_info else default_name
+        intro_voice = _session_info.get("voice", default_voice) if _session_info else default_voice
         try:
-            result = _tts_engine.synthesize(f"{name} here, ready to go.", voice, 1.0)
+            result = _tts_engine.synthesize(f"{intro_name} here, ready to go.", intro_voice, 1.0)
             _audio_player.play(result.samples, result.sample_rate)
-            logger.info(f"Preheat intro spoken: {name}")
+            logger.info(f"Preheat intro spoken: {intro_name}")
         except Exception as e:
             logger.warning(f"Preheat intro failed: {e}")
 

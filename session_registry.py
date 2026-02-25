@@ -245,6 +245,7 @@ def register_session(
             "voice": voice,
             "port": port,
             "pid": os.getpid(),
+            "session_id": None,  # Set later by SessionStart hook
             "tmux_session": tmux_session,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -275,6 +276,62 @@ def unregister_session() -> None:
         logger.warning(f"Failed to unregister session: {e}")
 
     logger.info("Session unregistered")
+
+
+def update_session_id(pid: int, session_id: str) -> Optional[dict]:
+    """Set the session_id on this PID's entry and reconcile voice with siblings.
+
+    When the SessionStart hook fires, it sends the session_id to the server.
+    The server calls this to:
+    1. Set session_id on its own entry
+    2. Check if a living sibling (same session_id) already has a voice
+    3. If so, adopt that voice (shared session = shared voice)
+
+    Returns the updated session dict, or None if PID not found.
+    """
+    path = _sessions_path()
+    if not path.exists():
+        return None
+
+    try:
+        with open(path, "r+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            sessions = _read_sessions(path)
+            sessions = _clean_stale(sessions)
+
+            # Find our entry
+            our_entry = None
+            for s in sessions:
+                if s.get("pid") == pid:
+                    our_entry = s
+                    break
+
+            if our_entry is None:
+                return None
+
+            # Set session_id
+            our_entry["session_id"] = session_id
+
+            # Look for living siblings with the same session_id
+            for s in sessions:
+                if (s.get("session_id") == session_id
+                        and s.get("pid") != pid
+                        and _pid_alive(s.get("pid", 0))):
+                    # Sibling found — adopt its name and voice
+                    if s["name"] != our_entry["name"]:
+                        logger.info(
+                            f"Adopting sibling voice: {our_entry['name']} → {s['name']} "
+                            f"(shared session_id {session_id})"
+                        )
+                        our_entry["name"] = s["name"]
+                        our_entry["voice"] = s["voice"]
+                    break
+
+            _write_sessions(path, sessions)
+            return dict(our_entry)
+    except OSError as e:
+        logger.warning(f"Failed to update session_id: {e}")
+        return None
 
 
 def get_active_sessions() -> list[dict]:
