@@ -9,8 +9,8 @@ import fcntl
 import json
 import os
 import signal
+import subprocess
 import time
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -59,20 +59,26 @@ def _write_sessions(path: Path, sessions: list[dict]) -> None:
         json.dump({"sessions": sessions}, f, indent=2)
 
 
-# Max seconds since last MCP tool call before considering a session stale.
-# If a server hasn't had any tool calls in this time, it's likely orphaned
-# (MCP client disconnected but process is still running).
-_STALE_ACTIVITY_THRESHOLD = 300  # 5 minutes
+def _get_ppid(pid: int) -> int:
+    """Get the parent PID of a process. Returns 0 on failure."""
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "ppid=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=2,
+        )
+        return int(result.stdout.strip()) if result.returncode == 0 else 0
+    except Exception:
+        return 0
 
 
 def _session_healthy(session: dict) -> bool:
-    """Check if a session is alive and actively used.
+    """Check if a session is alive and its parent (IDE) is still running.
 
-    Three checks:
-    1. PID alive (fast, catches crashed processes)
-    2. HTTP health check on /status (catches completely dead servers)
-    3. Activity check — if last_tool_call_age_s exceeds threshold, the server
-       is alive but orphaned (no MCP client connected)
+    Checks:
+    1. PID alive — catches crashed server processes
+    2. Parent PID alive — if the parent (Claude Code, Cursor, etc.) died,
+       the server is orphaned. On macOS/Linux, orphaned processes get
+       reparented to PID 1 (launchd/init).
     """
     pid = session.get("pid", 0)
     if not _pid_alive(pid):
@@ -82,34 +88,15 @@ def _session_healthy(session: dict) -> bool:
     if pid == os.getpid():
         return True
 
-    port = session.get("port")
-    if not port:
-        return False
-
-    try:
-        url = f"http://127.0.0.1:{port}/status"
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            data = json.loads(resp.read())
-            if not data.get("ready", False):
-                raise ValueError("not ready")
-
-            # Server is responding to HTTP — it's alive.
-            # Only flag as stale if it's been inactive for a very long time
-            # (MCP client disconnected but process lingers).
-            age = data.get("last_tool_call_age_s")
-            if age is not None and age > _STALE_ACTIVITY_THRESHOLD:
-                logger.info(
-                    f"Session '{session.get('name')}' (pid {pid}) inactive "
-                    f"for {age}s — treating as stale"
-                )
-                raise ValueError("inactive")
-
-            return True
-    except Exception:
-        # Server not responding or inactive — it's orphaned
-        logger.info(f"Session '{session.get('name')}' (pid {pid}) stale on port {port}")
-        # Kill the orphaned process
+    # Check if the server's parent process is still alive.
+    # If parent is PID 1 (launchd/init), the IDE exited and the server
+    # was reparented — it's orphaned.
+    ppid = _get_ppid(pid)
+    if ppid <= 1:
+        logger.info(
+            f"Session '{session.get('name')}' (pid {pid}) orphaned "
+            f"(parent pid {ppid}) — treating as stale"
+        )
         try:
             os.kill(pid, signal.SIGTERM)
             logger.info(f"Sent SIGTERM to orphaned process {pid}")
@@ -117,15 +104,15 @@ def _session_healthy(session: dict) -> bool:
             pass
         return False
 
+    return True
+
 
 def _clean_stale(sessions: list[dict]) -> list[dict]:
-    """Remove sessions that are dead or unresponsive.
+    """Remove sessions that are dead or orphaned.
 
     Detection logic:
     1. PID dead → remove immediately
-    2. HTTP /status not responding → remove and kill
-    3. Server running >10s but MCP client never connected → orphaned, remove and kill
-    4. Server with MCP connected but inactive >5min → orphaned, remove and kill
+    2. Parent PID is 1 (launchd/init) → IDE exited, server orphaned → kill and remove
     """
     alive = []
     for s in sessions:
