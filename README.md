@@ -159,6 +159,49 @@ Re-run `npx voicesmith-mcp install` to change your voice or update settings. Exi
 | Cursor | `~/.cursor/mcp.json` | `~/.cursor/rules/voicesmith.mdc` | No (single server) |
 | Codex | `~/.codex/mcp.json` | `~/.codex/AGENTS.md` | No (single session) |
 
+## Troubleshooting
+
+### The AI can't hear me (listen returns empty or times out)
+
+**Check microphone permissions.** On macOS, the terminal app that runs your IDE needs microphone access:
+
+1. Open **System Settings > Privacy & Security > Microphone**
+2. Make sure your terminal app is listed and enabled:
+   - **Warp**, **Terminal.app**, or **iTerm2** — for Claude Code
+   - **Cursor** or **VS Code** — if using those IDEs directly
+3. If the app isn't listed, the first `listen` call should trigger the permission prompt. Approve it and try again.
+
+> [!IMPORTANT]
+> The Python process inherits microphone permissions from the app that launched it. If your terminal doesn't have mic access, listen will silently fail.
+
+**Check your audio input device.** If an external mic is selected but not connected, the server opens it but gets silence:
+- Open **System Settings > Sound > Input** and verify the correct mic is selected
+- Or ask the AI: *"What's the server status?"* — check that `stt.loaded` and `vad.loaded` are both `true`
+
+**Another app is using the mic.** Apps like Zoom, Teams, or FaceTime can hold exclusive mic access. Close them and try again.
+
+**Voice too quiet for VAD.** The voice activity detector might not pick up soft speech. You can lower the sensitivity threshold in `~/.local/share/voicesmith-mcp/config.json`:
+
+```json
+{
+  "stt": {
+    "vad_threshold": 0.2
+  }
+}
+```
+
+Lower values = more sensitive. Default is `0.3`. Restart the session after changing.
+
+### The AI doesn't speak
+
+- Check that **espeak-ng** and **mpv** are installed: `which espeak-ng mpv`
+- Check the AI's status: ask *"What's your voice status?"*
+- If muted, say *"Unmute"*
+
+### The AI speaks with the wrong voice
+
+This can happen when another session is holding your preferred voice name. Ask the AI: *"Switch to Eric"* — it will either switch or tell you what's available.
+
 ## Uninstall
 
 ```bash
