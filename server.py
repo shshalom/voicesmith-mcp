@@ -175,6 +175,8 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
                 "ready": True,
                 "name": _session_info.get("name") if _session_info else None,
                 "port": _session_info.get("port") if _session_info else None,
+                "mcp_connected": _event_loop is not None,
+                "uptime_s": round(time.time() - _startup_time),
                 "last_tool_call_age_s": round(time.time() - _last_tool_call),
             })
             self.send_response(200)

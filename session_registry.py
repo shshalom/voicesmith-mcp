@@ -65,7 +65,7 @@ def _write_sessions(path: Path, sessions: list[dict]) -> None:
 _STALE_ACTIVITY_THRESHOLD = 300  # 5 minutes
 
 
-def _session_healthy(session: dict, activity_threshold: int = _STALE_ACTIVITY_THRESHOLD) -> bool:
+def _session_healthy(session: dict) -> bool:
     """Check if a session is alive and actively used.
 
     Three checks:
@@ -94,10 +94,24 @@ def _session_healthy(session: dict, activity_threshold: int = _STALE_ACTIVITY_TH
             if not data.get("ready", False):
                 raise ValueError("not ready")
 
-            # Check activity age — if server hasn't had MCP tool calls
-            # in a while, it's orphaned
+            mcp_connected = data.get("mcp_connected", True)
+            uptime = data.get("uptime_s", 0)
+
+            # A server that has been running >10s but never had an MCP client
+            # connect is orphaned — it was started but the client disconnected
+            # before making any tool calls (e.g., interrupted resume).
+            if not mcp_connected and uptime > 10:
+                logger.info(
+                    f"Session '{session.get('name')}' (pid {pid}) never connected "
+                    f"to MCP client after {uptime}s — treating as stale"
+                )
+                raise ValueError("never connected")
+
+            # For periodic cleanup (non-aggressive), also check long inactivity
+            # This catches servers whose MCP client disconnected long ago
+            # but the process is still lingering
             age = data.get("last_tool_call_age_s")
-            if age is not None and age > activity_threshold:
+            if age is not None and age > _STALE_ACTIVITY_THRESHOLD:
                 logger.info(
                     f"Session '{session.get('name')}' (pid {pid}) inactive "
                     f"for {age}s — treating as stale"
@@ -117,18 +131,18 @@ def _session_healthy(session: dict, activity_threshold: int = _STALE_ACTIVITY_TH
         return False
 
 
-def _clean_stale(sessions: list[dict], aggressive: bool = False) -> list[dict]:
+def _clean_stale(sessions: list[dict]) -> list[dict]:
     """Remove sessions that are dead or unresponsive.
 
-    Args:
-        aggressive: If True, use a shorter activity threshold (10s instead of 5min).
-                    Used during startup registration to quickly reclaim names from
-                    orphaned servers that haven't fully shut down yet.
+    Detection logic:
+    1. PID dead → remove immediately
+    2. HTTP /status not responding → remove and kill
+    3. Server running >10s but MCP client never connected → orphaned, remove and kill
+    4. Server with MCP connected but inactive >5min → orphaned, remove and kill
     """
-    threshold = 10 if aggressive else _STALE_ACTIVITY_THRESHOLD
     alive = []
     for s in sessions:
-        if _session_healthy(s, activity_threshold=threshold):
+        if _session_healthy(s):
             alive.append(s)
         else:
             logger.info(f"Removed stale session: {s.get('name')} (pid {s.get('pid')})")
@@ -223,7 +237,7 @@ def register_session(
         sessions = _read_sessions(path)
         # Aggressive cleanup on startup — use short activity threshold
         # to quickly reclaim names from orphaned servers
-        sessions = _clean_stale(sessions, aggressive=True)
+        sessions = _clean_stale(sessions)
 
         taken_names = {s["name"] for s in sessions}
 
@@ -233,7 +247,7 @@ def register_session(
             time.sleep(2)
             fcntl.flock(f, fcntl.LOCK_EX)
             sessions = _read_sessions(path)
-            sessions = _clean_stale(sessions, aggressive=True)
+            sessions = _clean_stale(sessions)
             _write_sessions(path, sessions)
             taken_names = {s["name"] for s in sessions}
 
