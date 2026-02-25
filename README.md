@@ -30,6 +30,42 @@ The installer will:
 
 Restart your IDE session after installing. The AI will greet you by voice on the first response.
 
+## Usage
+
+**Everything works out of the box.** After installing, just start a session — the AI speaks automatically. No configuration needed.
+
+The installer sets up voice behavior rules that teach the AI when and how to use its voice:
+- Opens with a brief spoken acknowledgment when you give it a task
+- Closes with a spoken summary when it's done
+- Asks questions out loud and listens for your voice response
+- Falls back to text if voice tools aren't available
+
+### Changing Voices Mid-Session
+
+Ask the AI to switch voices at any time:
+
+> "Switch to Nova"
+
+If the voice is available, the AI will switch immediately. If it's occupied by another session, the AI will tell you and show available alternatives.
+
+You can also browse all 54 voices:
+
+> "Show me the available voices"
+
+Or run `npx voicesmith-mcp voices` in a terminal to preview them.
+
+### Voice Persistence
+
+When you switch voices, the choice is saved. Next time you start or resume a session, the AI will use the same voice — no need to switch again.
+
+### Muting
+
+In a meeting or shared space? Ask the AI to mute:
+
+> "Mute the voice"
+
+The AI continues working normally — it just won't play audio. Say "unmute" when you're ready.
+
 ## Alternative Install
 
 If you don't have Node.js or prefer a shell script:
