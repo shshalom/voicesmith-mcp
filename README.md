@@ -151,6 +151,9 @@ Re-run `npx voicesmith-mcp install` to change your voice or update settings. Exi
 - **mpv** — audio playback
 - ~500MB disk space for models
 
+> [!WARNING]
+> **Windows is not supported yet.** The server uses Unix-specific features (file locking, audio commands, process detection). Windows support is planned — see [TODO](TODO.md) for details.
+
 ## Supported IDEs
 
 | IDE | Config Location | Rules Location | Multi-Session |

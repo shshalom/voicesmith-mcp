@@ -83,7 +83,7 @@
 | 38 | ⚪ | Larger Whisper models | Optional medium/large for higher accuracy |
 | 39 | ⚪ | Visual wake indicator | Menu bar / notification when wake listener activates |
 | 40 | ⚪ | "Hey listen, all" broadcast | Send to all sessions simultaneously |
-| 41 | ⚪ | Windows support | tmux alternative, different audio stack |
+| 41 | ⚪ | Windows support | Medium effort. Core engines (Kokoro ONNX, faster-whisper, Silero VAD, sounddevice) all work on Windows. Changes needed: (1) `fcntl.flock` → `portalocker` or `msvcrt.locking`, (2) audio playback fallback for Windows (mpv works via choco/scoop, need fallback), (3) ready sound from Windows system sounds or bundled WAV, (4) parent PID check via `psutil` instead of `ps`, (5) temp paths via `tempfile.gettempdir()`, (6) installer: `choco`/`scoop` instead of `brew`, venv path `Scripts/python.exe` |
 | 42 | ⚪ | Wake word sensitivity tuning | Per-environment threshold (noisy vs quiet) |
 | 43 | ⚪ | Periodic stale session cleanup | Background thread that cleans sessions.json every N seconds |
 
