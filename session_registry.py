@@ -94,22 +94,9 @@ def _session_healthy(session: dict) -> bool:
             if not data.get("ready", False):
                 raise ValueError("not ready")
 
-            mcp_connected = data.get("mcp_connected", True)
-            uptime = data.get("uptime_s", 0)
-
-            # A server that has been running >10s but never had an MCP client
-            # connect is orphaned — it was started but the client disconnected
-            # before making any tool calls (e.g., interrupted resume).
-            if not mcp_connected and uptime > 10:
-                logger.info(
-                    f"Session '{session.get('name')}' (pid {pid}) never connected "
-                    f"to MCP client after {uptime}s — treating as stale"
-                )
-                raise ValueError("never connected")
-
-            # For periodic cleanup (non-aggressive), also check long inactivity
-            # This catches servers whose MCP client disconnected long ago
-            # but the process is still lingering
+            # Server is responding to HTTP — it's alive.
+            # Only flag as stale if it's been inactive for a very long time
+            # (MCP client disconnected but process lingers).
             age = data.get("last_tool_call_age_s")
             if age is not None and age > _STALE_ACTIVITY_THRESHOLD:
                 logger.info(
