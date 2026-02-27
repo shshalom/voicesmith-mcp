@@ -2,6 +2,7 @@
 
 import asyncio
 import queue
+import time
 from typing import Optional
 
 import numpy as np
@@ -60,6 +61,7 @@ class MicCapture:
         silence_duration = 0.0
         loop = asyncio.get_event_loop()
 
+        stream = None
         try:
             stream = sd.InputStream(
                 samplerate=self._sample_rate,
@@ -77,15 +79,15 @@ class MicCapture:
                 # Check cancellation
                 if cancel_event and cancel_event.is_set():
                     logger.info("Recording cancelled by event")
-                    return None
+                    break
 
                 # Check timeout
                 elapsed = asyncio.get_event_loop().time() - start_time
                 if elapsed >= timeout:
                     if not speech_detected:
                         logger.info("Recording timed out with no speech detected")
-                        return None
-                    logger.info("Recording timed out")
+                    else:
+                        logger.info("Recording timed out")
                     break
 
                 # Get audio chunk from queue
@@ -112,9 +114,6 @@ class MicCapture:
                         )
                         break
 
-            stream.stop()
-            stream.close()
-
             if not chunks or not speech_detected:
                 return None
 
@@ -125,6 +124,18 @@ class MicCapture:
         except Exception as e:
             raise MicCaptureError(f"Recording failed: {e}") from e
         finally:
+            # Safely tear down the audio stream. The CoreAudio IO thread may
+            # still be executing the callback when we call stop(). Wait briefly
+            # between stop() and close() to let the IO thread finish — this
+            # prevents the segfault in libffi/PortAudio where the callback
+            # dereferences freed memory.
+            if stream is not None:
+                try:
+                    stream.stop()
+                    time.sleep(0.05)  # Let CoreAudio IO thread finish
+                    stream.close()
+                except Exception as e:
+                    logger.debug(f"Stream teardown: {e}")
             self._recording = False
 
     def _audio_callback(self, indata, frames, time, status) -> None:
