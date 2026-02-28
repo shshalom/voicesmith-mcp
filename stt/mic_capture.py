@@ -1,6 +1,7 @@
 """Microphone capture with VAD-controlled recording."""
 
 import asyncio
+import platform
 import queue
 import time
 from typing import Optional
@@ -11,6 +12,9 @@ from shared import MicCaptureError, STT_SAMPLE_RATE, get_logger
 from stt.vad import VoiceActivityDetector
 
 logger = get_logger("stt.mic")
+
+# Number of initial chunks to check for zero-amplitude audio (TCC silent denial)
+_ZERO_CHECK_CHUNKS = 10  # ~320ms at 512 samples/16kHz
 
 
 class MicCapture:
@@ -59,7 +63,8 @@ class MicCapture:
         chunks: list[np.ndarray] = []
         speech_detected = False
         silence_duration = 0.0
-        loop = asyncio.get_event_loop()
+        zero_check_done = False
+        loop = asyncio.get_running_loop()
 
         # Reset VAD state — the LSTM hidden state and context window must
         # be cleared between recordings to avoid stale state from previous
@@ -89,7 +94,7 @@ class MicCapture:
                 except queue.Empty:
                     break
 
-            start_time = asyncio.get_event_loop().time()
+            start_time = loop.time()
 
             while not self._stop_flag:
                 # Check cancellation
@@ -98,7 +103,7 @@ class MicCapture:
                     break
 
                 # Check timeout
-                elapsed = asyncio.get_event_loop().time() - start_time
+                elapsed = loop.time() - start_time
                 if elapsed >= timeout:
                     if not speech_detected:
                         logger.info("Recording timed out with no speech detected")
@@ -115,6 +120,19 @@ class MicCapture:
                     continue
 
                 chunks.append(chunk)
+
+                # Early detection: if first N chunks are all zeros, the OS
+                # is silently blocking mic access (macOS TCC denial).
+                if not zero_check_done and len(chunks) >= _ZERO_CHECK_CHUNKS:
+                    zero_check_done = True
+                    all_zero = all(
+                        np.max(np.abs(c)) == 0.0 for c in chunks
+                    )
+                    if all_zero:
+                        raise MicCaptureError(
+                            self._zero_audio_message()
+                        )
+
                 is_speech = vad.is_speech(chunk)
 
                 if is_speech:
@@ -154,11 +172,31 @@ class MicCapture:
                     logger.debug(f"Stream teardown: {e}")
             self._recording = False
 
-    def _audio_callback(self, indata, frames, time, status) -> None:
+    def _audio_callback(self, indata, frames, time_info, status) -> None:
         """Sounddevice callback — pushes audio chunks to the queue."""
         if status:
             logger.warning(f"Audio callback status: {status}")
         self._audio_queue.put(indata.copy())
+
+    @staticmethod
+    def _zero_audio_message() -> str:
+        """Build an error message for zero-amplitude mic input."""
+        msg = (
+            "Microphone is returning silent audio. "
+            "The audio stream opened successfully but every sample is zero."
+        )
+        if platform.system() == "Darwin":
+            msg += (
+                "\n\nmacOS silently blocks mic access when the parent terminal app "
+                "hasn't been granted Microphone permission. Go to:\n"
+                "  System Settings > Privacy & Security > Microphone\n"
+                "and enable the toggle for the terminal app running Claude Code "
+                "(e.g. Terminal, iTerm2, Ghostty, Warp, etc.).\n\n"
+                "If your terminal isn't listed, try running a mic-using app from it "
+                "to trigger the permission prompt, or add it manually via:\n"
+                "  tccutil reset Microphone"
+            )
+        return msg
 
     @property
     def is_recording(self) -> bool:

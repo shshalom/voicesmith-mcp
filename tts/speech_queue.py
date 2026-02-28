@@ -55,7 +55,7 @@ class SpeechQueue:
         speed: float,
     ) -> SpeakResult:
         """Internal: synthesize and play text, blocking until done."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._speaking = True
         total_duration_ms = 0.0
         total_synthesis_ms = 0.0
