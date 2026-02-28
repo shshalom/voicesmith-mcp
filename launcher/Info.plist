@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>VoiceSmithMCP</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.voicesmith-mcp.launcher</string>
+    <key>CFBundleName</key>
+    <string>VoiceSmithMCP</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <!-- Background-only: no Dock icon or app switcher entry -->
+    <key>LSBackgroundOnly</key>
+    <true/>
+    <!-- Required for macOS TCC to show a mic permission dialog for this bundle -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>VoiceSmith MCP uses the microphone to transcribe voice input for Claude.</string>
+</dict>
+</plist>
