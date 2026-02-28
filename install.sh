@@ -201,9 +201,9 @@ if [ "$(uname)" = "Darwin" ]; then
         mkdir -p "$APP_BUNDLE/Contents/MacOS"
         cp "$LAUNCHER_PLIST" "$APP_BUNDLE/Contents/Info.plist"
         if clang \
-            -DVOICESMITH_PYTHON='"'"$VENV_DIR/bin/python3"'"' \
-            -DVOICESMITH_SERVER='"'"$INSTALL_DIR/server.py"'"' \
-            -o "$APP_BINARY" "$LAUNCHER_SRC" 2>/dev/null \
+            "-DVOICESMITH_PYTHON=\"$VENV_DIR/bin/python3\"" \
+            "-DVOICESMITH_SERVER=\"$INSTALL_DIR/server.py\"" \
+            "$LAUNCHER_SRC" -o "$APP_BINARY" 2>/dev/null \
             && codesign -s - "$APP_BUNDLE" 2>/dev/null; then
             LAUNCHER_BINARY="$APP_BINARY"
             ok "macOS mic launcher built ($APP_BUNDLE)"
