@@ -9,7 +9,7 @@ Works with Claude Code, Cursor, VS Code, Windsurf, Zed, JetBrains, and any other
 ## Background
 
 AI coding assistants are text-only by default. This project adds a full voice layer so that:
-- The main AI agent speaks responses aloud (bookend pattern: opening + closing voice)
+- The main AI agent speaks responses aloud (closing voice always, opening voice when meaningful)
 - Sub-agents and team agents each have distinct voices, creating a "team of people" feel
 - Handoffs between agents are audible — you hear who's talking without reading
 - The AI can listen to your spoken responses — no typing needed when asked a question
@@ -641,13 +641,14 @@ All injected blocks are marked with `<!-- installed by voicesmith-mcp -->` for i
 
 The rules are personalized with the chosen main agent name and teach the AI:
 
-1. **Voice identity** — "You are **Eric**. Always call `speak` with `name: "Eric"`."
+1. **Voice identity** — "You are **Eric**. Always call `speak` with `name: "Eric"`." Includes tone guidance: be conversational, match the user's energy.
 2. **Voice switching** — If `speak` returns `name_occupied`, tell the user the voice is taken, call `get_voice_registry`, and show available voices. Never silently fall back.
-3. **Bookend speaking pattern** — Opening voice (`block: false`) + closing voice (`block: true`, never skip)
-4. **Mandatory voice for questions** — Whenever asking the user a question, MUST speak it aloud using `speak_then_listen` (not regular `speak`), so the mic opens right after
-5. **Sub-agent voice assignment** — Call `get_voice_registry` to see available voices, pick names matching Kokoro voices, never reuse the main agent's name
-6. **Handoff protocol** — Both agents speak on handoffs
-7. **Fallback** — Text-only when tools unavailable, respect muted state
+3. **Speaking pattern** — Opening voice is optional (only when meaningful, e.g., clarifying approach — no filler). Closing voice (`block: true`) is mandatory, never skip.
+4. **Voice for questions** — Use `speak_then_listen` only when the AI literally cannot continue without user input (choosing between options, confirming a destructive action). Rhetorical wrap-ups use regular `speak`.
+5. **Speed preferences** — The `speak` tool accepts a `speed` parameter. If the user asks to speak slower/faster, adjust and remember for the session.
+6. **Sub-agent voice assignment** — Pick names matching Kokoro voices, never reuse the main agent's name. On handoffs, both agents speak.
+7. **Error handling** — If `speak` or `speak_then_listen` fails, fall back to text silently. No retries.
+8. **Fallback** — Text-only when tools unavailable, respect muted state
 
 ### Template
 
