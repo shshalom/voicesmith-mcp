@@ -73,9 +73,9 @@
 |---|--------|---------|-------|
 | 29 | ⚪ | Custom wake word training CLI | `npx voicesmith-mcp train-wake-word "Hey Nova"` — uses Colab or local training |
 | 30 | ⚪ | GUI editor support (Cursor, VS Code) | Needs InputMethodKit, sendkeys, or editor extension for text injection |
-| 31 | ⚪ | README.md | User-facing documentation |
-| 32 | ⚪ | LICENSE file | Apache 2.0 |
-| 33 | ⚪ | Publish to npm | package.json ready, needs npm account |
+| 31 | 🟢 | README.md | Created with usage, troubleshooting, multi-session docs |
+| 32 | 🟢 | LICENSE file | Apache 2.0 created |
+| 33 | 🟢 | Publish to npm | Live at voicesmith-mcp on npm |
 | 34 | ⚪ | GitHub Actions CI | macOS runner, mocked tests (no models) |
 | 35 | ⚪ | Streaming TTS playback | Play chunk 1 while synthesizing chunk 2 |
 | 36 | ⚪ | Linux ready sound fallback | Bundled WAV + aplay/paplay |
@@ -85,7 +85,7 @@
 | 40 | ⚪ | "Hey listen, all" broadcast | Send to all sessions simultaneously |
 | 41 | ⚪ | Windows support | Medium effort. Core engines (Kokoro ONNX, faster-whisper, Silero VAD, sounddevice) all work on Windows. Changes needed: (1) `fcntl.flock` → `portalocker` or `msvcrt.locking`, (2) audio playback fallback for Windows (mpv works via choco/scoop, need fallback), (3) ready sound from Windows system sounds or bundled WAV, (4) parent PID check via `psutil` instead of `ps`, (5) temp paths via `tempfile.gettempdir()`, (6) installer: `choco`/`scoop` instead of `brew`, venv path `Scripts/python.exe` |
 | 42 | ⚪ | Wake word sensitivity tuning | Per-environment threshold (noisy vs quiet) |
-| 43 | ⚪ | Periodic stale session cleanup | Background thread that cleans sessions.json every N seconds |
+| 43 | 🟢 | Periodic stale session cleanup | Runs every 60s via save thread, parent PID check for orphaned servers |
 
 ---
 
