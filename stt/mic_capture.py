@@ -61,6 +61,11 @@ class MicCapture:
         silence_duration = 0.0
         loop = asyncio.get_event_loop()
 
+        # Reset VAD state — the LSTM hidden state and context window must
+        # be cleared between recordings to avoid stale state from previous
+        # audio affecting speech detection.
+        vad.reset()
+
         stream = None
         try:
             stream = sd.InputStream(
@@ -72,6 +77,17 @@ class MicCapture:
             )
             stream.start()
             logger.info("Microphone recording started")
+
+            # Discard the first ~200ms of audio to avoid picking up residual
+            # speaker output (Tink sound or TTS playback that just finished).
+            # This prevents VAD from detecting speaker bleed as "speech" and
+            # then cutting off when the bleed stops.
+            flush_chunks = int(0.2 * self._sample_rate / 512)  # ~6 chunks
+            for _ in range(flush_chunks):
+                try:
+                    self._audio_queue.get(timeout=0.1)
+                except queue.Empty:
+                    break
 
             start_time = asyncio.get_event_loop().time()
 
