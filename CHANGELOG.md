@@ -2,6 +2,15 @@
 
 All notable changes to VoiceSmith MCP are documented here.
 
+## [1.0.14] - 2026-02-28
+
+### Changed
+- **`set_voice` tool:** Now also renames the session so name and voice always match. Name is derived from voice ID (e.g., `am_fenrir` → "Fenrir"). Returns `previous_name` when renamed. Returns `name_occupied` error if the target name is taken by another session.
+
+### Added
+- **`voice_registry.py`:** `rename_voice()` method — atomically swaps old/new name entries in the registry
+- **`session_registry.py`:** `rename_session()` function — renames a session in sessions.json with conflict detection
+
 ## [1.0.10] - 2026-02-28
 
 ### Changed

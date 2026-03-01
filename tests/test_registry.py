@@ -220,3 +220,36 @@ class TestPreloadedRegistry:
         reg = VoiceRegistry(preloaded_registry=original)
         original["Agent2"] = "af_nova"
         assert reg.size == 1  # not affected by external mutation
+
+
+class TestRenameVoice:
+    """Test rename_voice method."""
+
+    def test_rename_removes_old_entry(self):
+        reg = VoiceRegistry()
+        reg.set_voice("Liam", "am_liam")
+        result = reg.rename_voice("Liam", "Fenrir", "am_fenrir")
+        assert result is True
+        assert "Liam" not in reg.get_registry()
+        assert reg.get_registry()["Fenrir"] == "am_fenrir"
+
+    def test_rename_same_name_updates_voice(self):
+        reg = VoiceRegistry()
+        reg.set_voice("Eric", "am_eric")
+        result = reg.rename_voice("Eric", "Eric", "af_nova")
+        assert result is True
+        assert reg.get_registry()["Eric"] == "af_nova"
+
+    def test_rename_invalid_voice_returns_false(self):
+        reg = VoiceRegistry()
+        reg.set_voice("Liam", "am_liam")
+        result = reg.rename_voice("Liam", "Fenrir", "am_nonexistent")
+        assert result is False
+        # Old entry should still be there
+        assert "Liam" in reg.get_registry()
+
+    def test_rename_nonexistent_old_name(self):
+        reg = VoiceRegistry()
+        result = reg.rename_voice("Ghost", "Fenrir", "am_fenrir")
+        assert result is True
+        assert reg.get_registry()["Fenrir"] == "am_fenrir"

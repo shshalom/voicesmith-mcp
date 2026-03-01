@@ -189,7 +189,7 @@ Get current agent-to-voice mappings. This registry is built dynamically — entr
 
 #### `set_voice`
 
-Assign or reassign a voice to an agent name.
+Assign or reassign a voice to an agent name. **Also renames the session** so the name and voice always match. The name is derived from the voice ID (e.g., `am_fenrir` → "Fenrir").
 
 **Parameters:**
 | Name | Type | Required | Description |
@@ -197,16 +197,28 @@ Assign or reassign a voice to an agent name.
 | `name` | string | Yes | Agent name to assign. |
 | `voice` | string | Yes | Kokoro voice ID (e.g., "am_eric"). Must be a valid voice from `list_voices`. |
 
-**Returns:**
+**Returns (rename):**
 ```json
 {
   "success": true,
-  "name": "Eric",
-  "voice": "am_eric"
+  "name": "Fenrir",
+  "voice": "am_fenrir",
+  "previous_name": "Liam"
 }
 ```
 
-**Invalid voice ID:** If the voice ID doesn't exist in the 53 available voices, returns `{ "success": false, "error": "invalid_voice", "message": "Voice 'am_xyz' not found. Use list_voices to see available options." }`
+`previous_name` is only present when the session was renamed (name changed). If the name didn't change (same voice reassigned), it's omitted.
+
+**Returns (name occupied):** If the derived name is already taken by another active session:
+```json
+{
+  "success": false,
+  "error": "name_occupied",
+  "message": "'Fenrir' is occupied by another session."
+}
+```
+
+**Invalid voice ID:** If the voice ID doesn't exist in the 54 available voices, returns `{ "success": false, "error": "invalid_voice", "message": "Voice 'am_xyz' not found. Use list_voices to see available options." }`
 
 #### `stop`
 

@@ -340,8 +340,9 @@ class TestVoiceRegistryTool:
         result = await server.set_voice("TestAgent", "af_nova")
 
         assert result["success"] is True
-        assert result["name"] == "TestAgent"
+        assert result["name"] == "Nova"  # name derived from voice ID
         assert result["voice"] == "af_nova"
+        assert result["previous_name"] == "TestAgent"
 
     @pytest.mark.asyncio
     async def test_set_voice_invalid(self):

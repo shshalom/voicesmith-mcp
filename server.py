@@ -41,7 +41,7 @@ from shared import (
     get_logger,
 )
 from config import load_config, save_config, get_config_path, AppConfig
-from session_registry import register_session, unregister_session
+from session_registry import register_session, rename_session, unregister_session
 
 logger = get_logger("server")
 
@@ -565,6 +565,10 @@ async def get_voice_registry() -> dict:
 async def set_voice(name: str, voice: str) -> dict:
     """Assign or reassign a voice to an agent name.
 
+    Also renames the session so name and voice always match.
+    The name is derived from the voice ID (e.g., "am_fenrir" -> "Fenrir").
+    If the derived name is taken by another session, returns name_occupied error.
+
     Args:
         name: Agent name to assign.
         voice: Kokoro voice ID (e.g., "am_eric"). Must be valid.
@@ -579,17 +583,41 @@ async def set_voice(name: str, voice: str) -> dict:
             "message": f"Voice '{voice}' not found. Use list_voices to see available options.",
         }
 
-    _registry.set_voice(name, voice)
+    # Derive canonical name from voice ID (e.g., "am_fenrir" -> "Fenrir")
+    # The voice ID format is {prefix}_{name}, so split on underscore and capitalize
+    parts = voice.split("_", 1)
+    new_name = parts[1].capitalize() if len(parts) == 2 else name
+
+    old_name = _session_info["name"] if _session_info else name
+
+    # Update sessions.json with conflict check
+    if _session_info:
+        try:
+            updated = rename_session(os.getpid(), new_name, voice)
+            if updated:
+                _session_info.update(updated)
+        except ValueError:
+            return {
+                "success": False,
+                "error": "name_occupied",
+                "message": f"'{new_name}' is occupied by another session.",
+            }
+
+    # Update voice registry (remove old entry, add new)
+    _registry.rename_voice(old_name, new_name, voice)
 
     # Persist last voice name so it survives session restart / resume
     if _config is not None:
-        _config.last_voice_name = name
+        _config.last_voice_name = new_name
         try:
             save_config(_config)
         except Exception as e:
             logger.warning(f"Failed to persist last_voice_name: {e}")
 
-    return {"success": True, "name": name, "voice": voice}
+    result = {"success": True, "name": new_name, "voice": voice}
+    if old_name != new_name:
+        result["previous_name"] = old_name
+    return result
 
 
 @mcp.tool()

@@ -1,6 +1,6 @@
 {
   "name": "voicesmith-mcp",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "Local AI voice for coding assistants — TTS & STT via MCP. Kokoro ONNX + faster-whisper, fully offline.",
   "bin": {
     "voicesmith-mcp": "bin/cli.js"

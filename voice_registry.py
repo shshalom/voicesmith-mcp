@@ -87,6 +87,22 @@ class VoiceRegistry:
         logger.info(f"Set voice '{voice_id}' for '{name}'")
         return True
 
+    def rename_voice(self, old_name: str, new_name: str, voice_id: str) -> bool:
+        """Rename an agent's registry entry and set a new voice.
+
+        Removes the old name entry and creates a new one.
+        If old_name == new_name, just updates the voice in place.
+        Returns True if the voice_id is valid, False otherwise.
+        """
+        if voice_id not in ALL_VOICE_IDS:
+            logger.warning(f"Invalid voice ID '{voice_id}' for rename '{old_name}' -> '{new_name}'")
+            return False
+        if old_name != new_name and old_name in self._registry:
+            del self._registry[old_name]
+        self._registry[new_name] = voice_id
+        logger.info(f"Renamed '{old_name}' -> '{new_name}' with voice '{voice_id}'")
+        return True
+
     def get_registry(self) -> dict[str, str]:
         """Return a copy of the current registry."""
         return dict(self._registry)

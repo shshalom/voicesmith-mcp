@@ -258,6 +258,52 @@ def register_session(
     return session
 
 
+def rename_session(pid: int, new_name: str, new_voice: str) -> Optional[dict]:
+    """Rename this server's session in the registry.
+
+    Updates the name and voice fields for the entry matching pid.
+    Returns the updated session dict, or None if PID not found.
+    Raises ValueError if new_name is taken by another active session.
+    """
+    path = _sessions_path()
+    if not path.exists():
+        return None
+
+    try:
+        with open(path, "r+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            sessions = _read_sessions(path)
+            sessions = _clean_stale(sessions)
+
+            # Find our entry
+            our_entry = None
+            for s in sessions:
+                if s.get("pid") == pid:
+                    our_entry = s
+                    break
+
+            if our_entry is None:
+                return None
+
+            # Check if new_name is taken by another session
+            if new_name != our_entry["name"]:
+                for s in sessions:
+                    if s.get("name") == new_name and s.get("pid") != pid:
+                        raise ValueError(
+                            f"'{new_name}' is occupied by another session (pid {s.get('pid')})"
+                        )
+
+            our_entry["name"] = new_name
+            our_entry["voice"] = new_voice
+            _write_sessions(path, sessions)
+            return dict(our_entry)
+    except ValueError:
+        raise
+    except OSError as e:
+        logger.warning(f"Failed to rename session: {e}")
+        return None
+
+
 def unregister_session() -> None:
     """Remove this server's session from the registry."""
     path = _sessions_path()
