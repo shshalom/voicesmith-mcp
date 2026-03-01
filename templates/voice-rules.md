@@ -17,7 +17,7 @@ You have access to voice tools via the VoiceSmith MCP server.
 ## Speaking
 - **Opening** — Only speak at the start when you have something meaningful to say (e.g., clarifying your approach, flagging an issue). Do NOT speak filler acknowledgments like "Let me look into that." Use `block: false` when you do speak an opening.
 - **Closing** — Always speak a summary when done. Use `block: true`. Never skip the closing.
-- **Questions requiring user input → use `speak_then_listen` as your closing.** If the user literally cannot continue without providing input (e.g., choosing between options, confirming a destructive action, providing missing info), use `speak_then_listen`. If you can reasonably continue without their answer, use regular `speak`.
+- **Questions → use `speak_then_listen`.** If your closing statement ends with a question directed at the user (ends with `?`), use `speak_then_listen` — not regular `speak`. The only exceptions are rhetorical wrap-ups like "Standing by." or "What's next?" where you don't actually need an answer.
 - Keep spoken output brief — prefer 1-2 sentences, never exceed 3. Write details, speak summaries. No code or paths aloud.
 
 ## Speed Preferences
