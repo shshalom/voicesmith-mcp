@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for VoiceSmithMCP audio capture service.
+
+  Installed to ~/Library/LaunchAgents/ by install.sh.
+  AUDIO_SERVICE_BINARY is replaced with the real path at install time.
+
+  Running under launchd (ppid=1) breaks the process chain from the user's
+  terminal, so macOS TCC attributes mic access to VoiceSmithMCP.app
+  (com.voicesmith-mcp.launcher) rather than to the terminal app.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.voicesmith-mcp.audio</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>AUDIO_SERVICE_BINARY</string>
+    </array>
+
+    <!-- Start automatically at login so it's ready the first time listen()
+         is called; KeepAlive ensures it restarts if it crashes. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Suppress rapid-restart throttling (default is 10 s). -->
+    <key>ThrottleInterval</key>
+    <integer>0</integer>
+
+    <!-- Route logs through unified logging. -->
+    <key>StandardOutPath</key>
+    <string>/tmp/voicesmith-audio-service.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/voicesmith-audio-service.log</string>
+</dict>
+</plist>

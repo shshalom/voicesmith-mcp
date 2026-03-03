@@ -4,6 +4,7 @@ import asyncio
 import os
 import platform
 import queue
+import socket
 import subprocess
 import threading
 import time
@@ -20,21 +21,60 @@ _CHUNK_SAMPLES = 512        # Silero VAD requires exactly 512-sample chunks at 1
 _CHUNK_BYTES   = _CHUNK_SAMPLES * 4   # float32 = 4 bytes/sample → 2048 bytes/chunk
 _ZERO_CHECK_CHUNKS = 10    # ~320ms of silence before detecting TCC denial
 
+_AUDIO_SERVICE_SOCKET  = "/tmp/voicesmith-audio.sock"
+_LAUNCHAGENT_LABEL     = "com.voicesmith-mcp.audio"
+_LAUNCHAGENT_PLIST     = os.path.expanduser(
+    f"~/Library/LaunchAgents/{_LAUNCHAGENT_LABEL}.plist"
+)
 
-def _find_audio_capture_binary() -> Optional[str]:
-    """Return path to VoiceSmithMCP.app audio-capture binary, or None.
 
-    The binary lives alongside server.py in the install directory, inside the
-    app bundle that install.sh builds.  Being a binary in VoiceSmithMCP.app
-    causes macOS TCC to attribute mic permission to our bundle rather than to
-    Homebrew's Python.app (which lacks NSMicrophoneUsageDescription).
-    """
-    # __file__ is stt/mic_capture.py — go up one level to the install root
+def _find_app_binary(name: str) -> Optional[str]:
+    """Return path to a named binary inside VoiceSmithMCP.app, or None."""
     install_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    binary = os.path.join(
-        install_dir, "VoiceSmithMCP.app", "Contents", "MacOS", "audio-capture"
-    )
+    binary = os.path.join(install_dir, "VoiceSmithMCP.app", "Contents", "MacOS", name)
     return binary if os.path.isfile(binary) and os.access(binary, os.X_OK) else None
+
+
+def _launchagent_available() -> bool:
+    """Return True if the VoiceSmithMCP audio LaunchAgent plist is installed."""
+    return os.path.isfile(_LAUNCHAGENT_PLIST)
+
+
+def _ensure_audio_service_running() -> None:
+    """Start the audio LaunchAgent if it is not already running.
+
+    The service is started via launchctl.  We then wait up to 3 seconds for
+    the Unix socket to appear, which signals the service is ready to accept
+    connections.
+    """
+    # If the socket exists and is connectable, service is already running.
+    if _socket_ready():
+        return
+
+    logger.info("Starting audio service via launchctl")
+    try:
+        subprocess.run(
+            ["launchctl", "start", _LAUNCHAGENT_LABEL],
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception as e:
+        raise MicCaptureError(f"Failed to start audio service: {e}") from e
+
+    # Wait up to 3 s for the socket to appear.
+    for _ in range(30):
+        if _socket_ready():
+            return
+        time.sleep(0.1)
+    raise MicCaptureError(
+        "VoiceSmith audio service did not start in time.  "
+        f"Check {_LAUNCHAGENT_PLIST} and launchctl output."
+    )
+
+
+def _socket_ready() -> bool:
+    """Return True if the audio service socket file exists."""
+    return os.path.exists(_AUDIO_SERVICE_SOCKET)
 
 
 class MicCapture:
@@ -55,9 +95,11 @@ class MicCapture:
     ) -> Optional[np.ndarray]:
         """Record audio from the microphone until silence is detected.
 
-        On macOS, uses the VoiceSmithMCP.app audio-capture binary so TCC
-        attributes mic permission to our bundle.  Falls back to sounddevice
-        on non-macOS or when the binary is absent.
+        On macOS, prefers the audio-service LaunchAgent backend which runs
+        under launchd (ppid=1), ensuring macOS TCC attributes mic permission
+        to VoiceSmithMCP.app rather than to the user's terminal app.
+        Falls back to the audio-capture subprocess if the LaunchAgent is not
+        installed, and to sounddevice on non-macOS systems.
 
         Args:
             vad: VoiceActivityDetector instance for speech detection.
@@ -74,23 +116,88 @@ class MicCapture:
         if self._recording:
             raise MicCaptureError("Another recording is already in progress")
 
-        # Reset VAD state — LSTM hidden state and context window must be cleared
-        # between recordings to avoid stale state from the previous session.
+        # Reset VAD state between recordings.
         vad.reset()
 
-        audio_capture_bin = (
-            _find_audio_capture_binary() if platform.system() == "Darwin" else None
-        )
+        if platform.system() == "Darwin":
+            if _launchagent_available():
+                return await self._record_via_socket(
+                    vad, timeout, silence_threshold, cancel_event
+                )
+            # Legacy: subprocess fallback for installs without the LaunchAgent.
+            audio_capture_bin = _find_app_binary("audio-service") or _find_app_binary("audio-capture")
+            if audio_capture_bin:
+                return await self._record_via_subprocess(
+                    audio_capture_bin, vad, timeout, silence_threshold, cancel_event
+                )
 
-        if audio_capture_bin:
-            return await self._record_via_subprocess(
-                audio_capture_bin, vad, timeout, silence_threshold, cancel_event
-            )
         return await self._record_via_sounddevice(
             vad, timeout, silence_threshold, cancel_event
         )
 
-    # ── Subprocess backend (macOS, VoiceSmithMCP.app binary) ──────────────────
+    # ── LaunchAgent socket backend (macOS primary) ─────────────────────────────
+
+    async def _record_via_socket(
+        self,
+        vad: VoiceActivityDetector,
+        timeout: float,
+        silence_threshold: float,
+        cancel_event: Optional[asyncio.Event],
+    ) -> Optional[np.ndarray]:
+        """Record via the VoiceSmithMCP audio LaunchAgent (Unix socket).
+
+        The LaunchAgent runs under launchd so macOS TCC attributes mic access
+        to com.voicesmith-mcp.launcher, not to the parent terminal app.
+        """
+        loop = asyncio.get_running_loop()
+
+        # Ensure the service is up and the socket is ready.
+        try:
+            await loop.run_in_executor(None, _ensure_audio_service_running)
+        except MicCaptureError:
+            raise
+        except Exception as e:
+            raise MicCaptureError(f"Audio service error: {e}") from e
+
+        # Open socket connection.
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.connect(_AUDIO_SERVICE_SOCKET)
+        except OSError as e:
+            sock.close()
+            raise MicCaptureError(f"Cannot connect to audio service: {e}") from e
+
+        self._recording = True
+        self._stop_flag = False
+        self._audio_queue = queue.Queue()
+
+        def _reader() -> None:
+            """Background thread: reads socket chunks → audio_queue."""
+            try:
+                while True:
+                    data = b""
+                    while len(data) < _CHUNK_BYTES:
+                        got = sock.recv(_CHUNK_BYTES - len(data))
+                        if not got:
+                            return  # service closed connection
+                        data += got
+                    self._audio_queue.put(np.frombuffer(data, dtype=np.float32).copy())
+            except Exception as exc:
+                logger.debug(f"socket reader thread exiting: {exc}")
+
+        reader_thread = threading.Thread(target=_reader, daemon=True)
+        reader_thread.start()
+        logger.info("Microphone recording started (audio-service socket)")
+
+        try:
+            self._flush_queue(int(0.2 * self._sample_rate / _CHUNK_SAMPLES))
+            return await self._run_vad_loop(vad, timeout, silence_threshold, cancel_event)
+        finally:
+            sock.close()  # signals service to stop sending for this session
+            reader_thread.join(timeout=1)
+            self._recording = False
+
+    # ── Subprocess backend (macOS legacy fallback) ─────────────────────────────
 
     async def _record_via_subprocess(
         self,
@@ -100,7 +207,7 @@ class MicCapture:
         silence_threshold: float,
         cancel_event: Optional[asyncio.Event],
     ) -> Optional[np.ndarray]:
-        """Record using the CoreAudio binary inside VoiceSmithMCP.app."""
+        """Record using a CoreAudio binary inside VoiceSmithMCP.app (legacy)."""
         self._recording = True
         self._stop_flag = False
         self._audio_queue = queue.Queue()
@@ -114,12 +221,11 @@ class MicCapture:
             )
         except Exception as e:
             self._recording = False
-            raise MicCaptureError(f"Failed to start audio-capture: {e}") from e
+            raise MicCaptureError(f"Failed to start audio binary: {e}") from e
 
-        logger.info("Microphone recording started (audio-capture subprocess)")
+        logger.info("Microphone recording started (subprocess fallback)")
 
         def _reader() -> None:
-            """Background thread: reads stdout → audio_queue."""
             try:
                 while True:
                     data = proc.stdout.read(_CHUNK_BYTES)
@@ -127,21 +233,13 @@ class MicCapture:
                         break
                     self._audio_queue.put(np.frombuffer(data, dtype=np.float32).copy())
             except Exception as exc:
-                logger.debug(f"audio-capture reader thread exiting: {exc}")
+                logger.debug(f"subprocess reader thread exiting: {exc}")
 
         reader_thread = threading.Thread(target=_reader, daemon=True)
         reader_thread.start()
 
         try:
-            # Flush the first ~200ms to discard speaker bleed from TTS playback
-            # that finished just before listen() was called.
-            flush_chunks = int(0.2 * self._sample_rate / _CHUNK_SAMPLES)  # ~6
-            for _ in range(flush_chunks):
-                try:
-                    self._audio_queue.get(timeout=0.15)
-                except queue.Empty:
-                    break
-
+            self._flush_queue(int(0.2 * self._sample_rate / _CHUNK_SAMPLES))
             return await self._run_vad_loop(vad, timeout, silence_threshold, cancel_event)
         finally:
             proc.terminate()
@@ -183,15 +281,7 @@ class MicCapture:
             stream.start()
             logger.info("Microphone recording started (sounddevice)")
 
-            # Discard the first ~200ms to avoid picking up residual speaker output
-            # (Tink sound or TTS playback that just finished).
-            flush_chunks = int(0.2 * self._sample_rate / _CHUNK_SAMPLES)  # ~6
-            for _ in range(flush_chunks):
-                try:
-                    self._audio_queue.get(timeout=0.1)
-                except queue.Empty:
-                    break
-
+            self._flush_queue(int(0.2 * self._sample_rate / _CHUNK_SAMPLES), chunk_timeout=0.1)
             return await self._run_vad_loop(vad, timeout, silence_threshold, cancel_event)
         except MicCaptureError:
             raise
@@ -201,11 +291,21 @@ class MicCapture:
             if stream is not None:
                 try:
                     stream.stop()
-                    time.sleep(0.05)  # Let CoreAudio IO thread finish (avoid segfault)
+                    time.sleep(0.05)
                     stream.close()
                 except Exception as e:
                     logger.debug(f"Stream teardown: {e}")
             self._recording = False
+
+    # ── Shared helpers ─────────────────────────────────────────────────────────
+
+    def _flush_queue(self, n_chunks: int, chunk_timeout: float = 0.15) -> None:
+        """Discard the first n_chunks from the audio queue (drops speaker bleed)."""
+        for _ in range(n_chunks):
+            try:
+                self._audio_queue.get(timeout=chunk_timeout)
+            except queue.Empty:
+                break
 
     # ── Shared VAD loop ────────────────────────────────────────────────────────
 
@@ -216,7 +316,7 @@ class MicCapture:
         silence_threshold: float,
         cancel_event: Optional[asyncio.Event],
     ) -> Optional[np.ndarray]:
-        """VAD recording loop — shared by both capture backends.
+        """VAD recording loop — shared by all capture backends.
 
         Reads 512-sample float32 chunks from self._audio_queue, runs Silero VAD
         on each, and returns when silence_threshold is exceeded after speech,
@@ -233,12 +333,10 @@ class MicCapture:
         start_time = loop.time()
 
         while not self._stop_flag:
-            # Check cancellation
             if cancel_event and cancel_event.is_set():
                 logger.info("Recording cancelled by event")
                 break
 
-            # Check timeout
             elapsed = loop.time() - start_time
             if elapsed >= timeout:
                 if not speech_detected:
@@ -247,7 +345,6 @@ class MicCapture:
                     logger.info("Recording timed out")
                 break
 
-            # Get audio chunk (0.1s poll keeps cancel/timeout checks responsive)
             try:
                 chunk = await loop.run_in_executor(
                     None, self._audio_queue.get, True, 0.1
@@ -257,8 +354,6 @@ class MicCapture:
 
             chunks.append(chunk)
 
-            # Early detection: if first N chunks are all zeros, the OS is
-            # silently blocking mic access (macOS TCC denial).
             if not zero_check_done and len(chunks) >= _ZERO_CHECK_CHUNKS:
                 zero_check_done = True
                 if all(np.max(np.abs(c)) == 0.0 for c in chunks):
@@ -301,14 +396,12 @@ class MicCapture:
         )
         if platform.system() == "Darwin":
             msg += (
-                "\n\nmacOS silently blocks mic access when the parent terminal app "
-                "hasn't been granted Microphone permission. Go to:\n"
-                "  System Settings > Privacy & Security > Microphone\n"
-                "and enable the toggle for the terminal app running Claude Code "
-                "(e.g. Terminal, iTerm2, Ghostty, Warp, etc.).\n\n"
-                "If your terminal isn't listed, try running a mic-using app from it "
-                "to trigger the permission prompt, or add it manually via:\n"
-                "  tccutil reset Microphone"
+                "\n\nmacOS is blocking mic access.  The VoiceSmithMCP audio service "
+                "may not have been granted Microphone permission yet.  "
+                "Check System Settings > Privacy & Security > Microphone and "
+                "ensure VoiceSmithMCP is enabled.\n\n"
+                "If VoiceSmithMCP is not listed, re-run the installer:\n"
+                "  ./install.sh"
             )
         return msg
 

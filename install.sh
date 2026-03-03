@@ -185,21 +185,31 @@ fi
 
 # ─── macOS app bundle (TCC mic attribution fix) ───────────────────────────
 # macOS TCC attributes mic permission to the "responsible process".  When
-# Python is run from a terminal like Commander, Homebrew's Python.app takes
-# TCC attribution (it lacks NSMicrophoneUsageDescription → silent deny).
+# macOS TCC fix: the user's terminal (e.g. Commander) is the "responsible
+# process" for all subprocesses, but terminals typically lack
+# NSMicrophoneUsageDescription → TCC silently denies mic access.
 #
-# Fix: build VoiceSmithMCP.app with two binaries inside Contents/MacOS/:
-#   VoiceSmithMCP  — launcher: Claude Code invokes this; it fork+execs Python
-#   audio-capture  — CoreAudio recorder: Python spawns this to capture mic;
-#                    because it's inside VoiceSmithMCP.app, TCC shows the
-#                    dialog for our bundle rather than for Python.app
+# Solution: a LaunchAgent (audio-service) runs under launchd (ppid=1),
+# breaking the terminal process chain so TCC attributes mic access to
+# VoiceSmithMCP.app (com.voicesmith-mcp.launcher) which has the usage
+# description.  Python connects to the service via a Unix socket.
+#
+# App bundle binaries (all signed as com.voicesmith-mcp.launcher):
+#   VoiceSmithMCP   — MCP launcher: Claude Code invokes this; forks Python
+#   audio-service   — LaunchAgent daemon: streams mic audio over Unix socket
+#   audio-capture   — legacy subprocess fallback (kept for compatibility)
 if [ "$(uname)" = "Darwin" ]; then
     LAUNCHER_SRC="$SCRIPT_DIR/launcher/main.c"
     AUDIO_CAPTURE_SRC="$SCRIPT_DIR/launcher/mic_capture.c"
+    AUDIO_SERVICE_SRC="$SCRIPT_DIR/launcher/audio_service.c"
     LAUNCHER_PLIST="$SCRIPT_DIR/launcher/Info.plist"
+    LAUNCHAGENT_TEMPLATE="$SCRIPT_DIR/launcher/com.voicesmith-mcp.audio.plist"
     APP_BUNDLE="$INSTALL_DIR/VoiceSmithMCP.app"
     APP_BINARY="$APP_BUNDLE/Contents/MacOS/VoiceSmithMCP"
     AUDIO_CAPTURE_BINARY="$APP_BUNDLE/Contents/MacOS/audio-capture"
+    AUDIO_SERVICE_BINARY="$APP_BUNDLE/Contents/MacOS/audio-service"
+    LAUNCHAGENT_PLIST="$HOME/Library/LaunchAgents/com.voicesmith-mcp.audio.plist"
+    LAUNCHAGENT_LABEL="com.voicesmith-mcp.audio"
 
     if [ -f "$LAUNCHER_SRC" ] && [ -f "$LAUNCHER_PLIST" ] && command -v clang &>/dev/null; then
         mkdir -p "$APP_BUNDLE/Contents/MacOS"
@@ -214,8 +224,18 @@ if [ "$(uname)" = "Darwin" ]; then
             launcher_ok=true
         fi
 
-        # Build the CoreAudio mic recorder (Python spawns this to bypass
-        # Python.app's TCC attribution)
+        # Build the LaunchAgent audio streaming service
+        audio_service_ok=false
+        if $launcher_ok && [ -f "$AUDIO_SERVICE_SRC" ]; then
+            if clang \
+                -framework AudioToolbox \
+                -framework CoreFoundation \
+                "$AUDIO_SERVICE_SRC" -o "$AUDIO_SERVICE_BINARY" 2>/dev/null; then
+                audio_service_ok=true
+            fi
+        fi
+
+        # Build the legacy CoreAudio subprocess recorder (fallback)
         if $launcher_ok && [ -f "$AUDIO_CAPTURE_SRC" ]; then
             clang \
                 -framework AudioToolbox \
@@ -223,17 +243,48 @@ if [ "$(uname)" = "Darwin" ]; then
                 "$AUDIO_CAPTURE_SRC" -o "$AUDIO_CAPTURE_BINARY" 2>/dev/null || true
         fi
 
-        # Sign the complete bundle (--force required when re-signing after
-        # adding a second binary to Contents/MacOS/)
+        # Sign the bundle, then re-sign audio-service and audio-capture with
+        # the bundle identifier so TCC looks up com.voicesmith-mcp.launcher.
         if $launcher_ok && codesign -s - --force "$APP_BUNDLE" 2>/dev/null; then
+            # Re-sign helper binaries with the bundle identifier so TCC
+            # attributes their mic access to com.voicesmith-mcp.launcher.
+            for helper in "$AUDIO_SERVICE_BINARY" "$AUDIO_CAPTURE_BINARY"; do
+                [ -f "$helper" ] && \
+                    codesign --force --sign - \
+                        --identifier "com.voicesmith-mcp.launcher" \
+                        "$helper" 2>/dev/null || true
+            done
+            # Re-seal the bundle to include the updated helper signatures.
+            codesign -s - --force "$APP_BUNDLE" 2>/dev/null || true
+
             LAUNCHER_BINARY="$APP_BINARY"
-            if [ -f "$AUDIO_CAPTURE_BINARY" ]; then
-                ok "macOS app bundle built with mic launcher + audio-capture"
+            if $audio_service_ok; then
+                ok "macOS app bundle built with launcher + audio-service + audio-capture"
+            elif [ -f "$AUDIO_CAPTURE_BINARY" ]; then
+                ok "macOS app bundle built with launcher + audio-capture"
             else
-                ok "macOS mic launcher built (audio-capture skipped)"
+                ok "macOS mic launcher built"
             fi
         else
             warn "Launcher build failed — microphone will rely on terminal's TCC permission"
+        fi
+
+        # Install the LaunchAgent so audio-service runs under launchd (ppid=1),
+        # ensuring TCC attributes mic access to VoiceSmithMCP.app rather than
+        # to the user's terminal.
+        if $audio_service_ok && [ -f "$LAUNCHAGENT_TEMPLATE" ]; then
+            mkdir -p "$HOME/Library/LaunchAgents"
+            sed "s|AUDIO_SERVICE_BINARY|$AUDIO_SERVICE_BINARY|g" \
+                "$LAUNCHAGENT_TEMPLATE" > "$LAUNCHAGENT_PLIST"
+
+            # Unload any stale instance first, then load the updated plist.
+            launchctl unload "$LAUNCHAGENT_PLIST" 2>/dev/null || true
+            if launchctl load -w "$LAUNCHAGENT_PLIST" 2>/dev/null; then
+                ok "LaunchAgent installed and loaded (com.voicesmith-mcp.audio)"
+                info "The audio service runs in the background and restarts at login."
+            else
+                warn "LaunchAgent install failed — re-run with: launchctl load -w $LAUNCHAGENT_PLIST"
+            fi
         fi
     elif ! command -v clang &>/dev/null; then
         warn "clang not found — microphone may not work in all terminals"
