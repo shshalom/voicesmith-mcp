@@ -154,8 +154,9 @@ class WakeWordListener:
 
     def yield_mic(self):
         """Pause listening and release the mic for the AI listen tool."""
-        if self._state != WakeState.LISTENING:
-            return
+        with self._state_lock:
+            if self._state != WakeState.LISTENING:
+                return
         self._yield_event.set()
         # Wait for the listener to actually pause
         self._yield_done.wait(timeout=3)
@@ -169,7 +170,8 @@ class WakeWordListener:
 
     @property
     def is_listening(self) -> bool:
-        return self._state == WakeState.LISTENING
+        with self._state_lock:
+            return self._state == WakeState.LISTENING
 
     @property
     def state(self) -> str:

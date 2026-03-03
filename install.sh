@@ -16,6 +16,7 @@ MODEL_DIR="$INSTALL_DIR/models"
 VENV_DIR="$INSTALL_DIR/.venv"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SENTINEL="<!-- installed by voicesmith-mcp -->"
+LAUNCHER_BINARY=""
 
 ok()     { echo -e "  ${GREEN}✓${RESET} $1"; }
 action() { echo -ne "  ${BLUE}→${RESET} $1"; }
@@ -182,6 +183,115 @@ else:
     fi
 fi
 
+# ─── macOS app bundle (TCC mic attribution fix) ───────────────────────────
+# macOS TCC attributes mic permission to the "responsible process".  When
+# macOS TCC fix: the user's terminal (e.g. Commander) is the "responsible
+# process" for all subprocesses, but terminals typically lack
+# NSMicrophoneUsageDescription → TCC silently denies mic access.
+#
+# Solution: a LaunchAgent (audio-service) runs under launchd (ppid=1),
+# breaking the terminal process chain so TCC attributes mic access to
+# VoiceSmithMCP.app (com.voicesmith-mcp.launcher) which has the usage
+# description.  Python connects to the service via a Unix socket.
+#
+# App bundle binaries (all signed as com.voicesmith-mcp.launcher):
+#   VoiceSmithMCP   — MCP launcher: Claude Code invokes this; forks Python
+#   audio-service   — LaunchAgent daemon: streams mic audio over Unix socket
+#   audio-capture   — legacy subprocess fallback (kept for compatibility)
+if [ "$(uname)" = "Darwin" ]; then
+    LAUNCHER_SRC="$SCRIPT_DIR/launcher/main.c"
+    AUDIO_CAPTURE_SRC="$SCRIPT_DIR/launcher/mic_capture.c"
+    AUDIO_SERVICE_SRC="$SCRIPT_DIR/launcher/audio_service.c"
+    LAUNCHER_PLIST="$SCRIPT_DIR/launcher/Info.plist"
+    LAUNCHAGENT_TEMPLATE="$SCRIPT_DIR/launcher/com.voicesmith-mcp.audio.plist"
+    APP_BUNDLE="$INSTALL_DIR/VoiceSmithMCP.app"
+    APP_BINARY="$APP_BUNDLE/Contents/MacOS/VoiceSmithMCP"
+    AUDIO_CAPTURE_BINARY="$APP_BUNDLE/Contents/MacOS/audio-capture"
+    AUDIO_SERVICE_BINARY="$APP_BUNDLE/Contents/MacOS/audio-service"
+    LAUNCHAGENT_PLIST="$HOME/Library/LaunchAgents/com.voicesmith-mcp.audio.plist"
+    LAUNCHAGENT_LABEL="com.voicesmith-mcp.audio"
+
+    if [ -f "$LAUNCHER_SRC" ] && [ -f "$LAUNCHER_PLIST" ] && command -v clang &>/dev/null; then
+        mkdir -p "$APP_BUNDLE/Contents/MacOS"
+        cp "$LAUNCHER_PLIST" "$APP_BUNDLE/Contents/Info.plist"
+
+        # Build the MCP launcher (stdio proxy between Claude Code and Python)
+        launcher_ok=false
+        if clang \
+            "-DVOICESMITH_PYTHON=\"$VENV_DIR/bin/python3\"" \
+            "-DVOICESMITH_SERVER=\"$INSTALL_DIR/server.py\"" \
+            "$LAUNCHER_SRC" -o "$APP_BINARY" 2>/dev/null; then
+            launcher_ok=true
+        fi
+
+        # Build the LaunchAgent audio streaming service
+        audio_service_ok=false
+        if $launcher_ok && [ -f "$AUDIO_SERVICE_SRC" ]; then
+            if clang \
+                -framework AudioToolbox \
+                -framework CoreFoundation \
+                "$AUDIO_SERVICE_SRC" -o "$AUDIO_SERVICE_BINARY" 2>/dev/null; then
+                audio_service_ok=true
+            fi
+        fi
+
+        # Build the legacy CoreAudio subprocess recorder (fallback)
+        if $launcher_ok && [ -f "$AUDIO_CAPTURE_SRC" ]; then
+            clang \
+                -framework AudioToolbox \
+                -framework CoreFoundation \
+                "$AUDIO_CAPTURE_SRC" -o "$AUDIO_CAPTURE_BINARY" 2>/dev/null || true
+        fi
+
+        # Sign the bundle, then re-sign audio-service and audio-capture with
+        # the bundle identifier so TCC looks up com.voicesmith-mcp.launcher.
+        if $launcher_ok && codesign -s - --force "$APP_BUNDLE" 2>/dev/null; then
+            # Re-sign helper binaries with the bundle identifier so TCC
+            # attributes their mic access to com.voicesmith-mcp.launcher.
+            for helper in "$AUDIO_SERVICE_BINARY" "$AUDIO_CAPTURE_BINARY"; do
+                [ -f "$helper" ] && \
+                    codesign --force --sign - \
+                        --identifier "com.voicesmith-mcp.launcher" \
+                        "$helper" 2>/dev/null || true
+            done
+            # Re-seal the bundle to include the updated helper signatures.
+            codesign -s - --force "$APP_BUNDLE" 2>/dev/null || true
+
+            LAUNCHER_BINARY="$APP_BINARY"
+            if $audio_service_ok; then
+                ok "macOS app bundle built with launcher + audio-service + audio-capture"
+            elif [ -f "$AUDIO_CAPTURE_BINARY" ]; then
+                ok "macOS app bundle built with launcher + audio-capture"
+            else
+                ok "macOS mic launcher built"
+            fi
+        else
+            warn "Launcher build failed — microphone will rely on terminal's TCC permission"
+        fi
+
+        # Install the LaunchAgent so audio-service runs under launchd (ppid=1),
+        # ensuring TCC attributes mic access to VoiceSmithMCP.app rather than
+        # to the user's terminal.
+        if $audio_service_ok && [ -f "$LAUNCHAGENT_TEMPLATE" ]; then
+            mkdir -p "$HOME/Library/LaunchAgents"
+            sed "s|AUDIO_SERVICE_BINARY|$AUDIO_SERVICE_BINARY|g" \
+                "$LAUNCHAGENT_TEMPLATE" > "$LAUNCHAGENT_PLIST"
+
+            # Unload any stale instance first, then load the updated plist.
+            launchctl unload "$LAUNCHAGENT_PLIST" 2>/dev/null || true
+            if launchctl load -w "$LAUNCHAGENT_PLIST" 2>/dev/null; then
+                ok "LaunchAgent installed and loaded (com.voicesmith-mcp.audio)"
+                info "The audio service runs in the background and restarts at login."
+            else
+                warn "LaunchAgent install failed — re-run with: launchctl load -w $LAUNCHAGENT_PLIST"
+            fi
+        fi
+    elif ! command -v clang &>/dev/null; then
+        warn "clang not found — microphone may not work in all terminals"
+        info "Install Xcode Command Line Tools to enable the mic launcher: xcode-select --install"
+    fi
+fi
+
 # ─── Step 3: Models ──────────────────────────────────────────────────────
 echo -e "\n${BOLD}Step 3/6: Checking models...${RESET}"
 mkdir -p "$MODEL_DIR"
@@ -220,6 +330,15 @@ info "whisper-base model (~150MB) will download automatically on first use"
 
 # ─── Step 4: MCP config ─────────────────────────────────────────────────
 echo -e "\n${BOLD}Step 4/6: Configuring MCP server...${RESET}"
+
+# Use the mic launcher bundle on macOS when available, plain python3 otherwise
+if [ -n "$LAUNCHER_BINARY" ]; then
+    MCP_COMMAND="$LAUNCHER_BINARY"
+    MCP_ARGS_JSON="[]"
+else
+    MCP_COMMAND="$VENV_DIR/bin/python3"
+    MCP_ARGS_JSON='["'"$INSTALL_DIR/server.py"'"]'
+fi
 
 # Auto-detect IDEs if no flags given
 if [ ${#TARGET_IDES[@]} -eq 0 ]; then
@@ -260,15 +379,24 @@ if [ ${#TARGET_IDES[@]} -eq 0 ]; then
     fi
 fi
 
-# MCP server entry (same for all IDEs)
-MCP_ENTRY="{\"command\": \"$VENV_DIR/bin/python3\", \"args\": [\"$INSTALL_DIR/server.py\"]}"
-
 configure_mcp() {
     local config_path="$1" ide_name="$2"
 
+    # Check if already configured with the correct command
     if [ -f "$config_path" ] && grep -q "voicesmith" "$config_path" 2>/dev/null; then
-        ok "$ide_name: already configured"
-        return
+        current_cmd=$("$VENV_DIR/bin/python3" -c "
+import json
+try:
+    with open('$config_path') as f:
+        c = json.load(f)
+    print(c.get('mcpServers', {}).get('voicesmith', {}).get('command', ''))
+except: pass
+" 2>/dev/null)
+        if [ "$current_cmd" = "$MCP_COMMAND" ]; then
+            ok "$ide_name: already configured"
+            return
+        fi
+        info "$ide_name: updating MCP command to use mic launcher..."
     fi
 
     mkdir -p "$(dirname "$config_path")"
@@ -276,12 +404,15 @@ configure_mcp() {
     if [ -f "$config_path" ]; then
         "$VENV_DIR/bin/python3" -c "
 import json
-with open('$config_path') as f:
-    config = json.load(f)
+try:
+    with open('$config_path') as f:
+        config = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError):
+    config = {}
 config.setdefault('mcpServers', {})
 config['mcpServers']['voicesmith'] = {
-    'command': '$VENV_DIR/bin/python3',
-    'args': ['$INSTALL_DIR/server.py']
+    'command': '$MCP_COMMAND',
+    'args': $MCP_ARGS_JSON
 }
 with open('$config_path', 'w') as f:
     json.dump(config, f, indent=2)
@@ -291,14 +422,14 @@ with open('$config_path', 'w') as f:
 {
   "mcpServers": {
     "voicesmith": {
-      "command": "$VENV_DIR/bin/python3",
-      "args": ["$INSTALL_DIR/server.py"]
+      "command": "$MCP_COMMAND",
+      "args": $MCP_ARGS_JSON
     }
   }
 }
 MCPEOF
     fi
-    ok "$ide_name: added to $config_path"
+    ok "$ide_name: configured in $config_path"
 }
 
 for ide in "${TARGET_IDES[@]}"; do
@@ -342,6 +473,8 @@ except: print('fail')
 
     if [ "$result" = "ok" ]; then
         ok "Microphone access granted"
+    elif [ -n "$LAUNCHER_BINARY" ]; then
+        ok "Mic launcher installed — macOS will prompt for permission on first voice use"
     else
         warn "Could not verify microphone access. macOS may prompt on first use."
     fi

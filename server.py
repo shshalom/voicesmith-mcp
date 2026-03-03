@@ -454,13 +454,17 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
         logger.info(f"Listening (prompt: {prompt})")
 
     try:
+        loop = asyncio.get_running_loop()
+
         # Play ready sound so the user knows to start speaking
         # Skip for push-to-talk (HTTP) — it has its own beep
         if prompt != "push-to-talk":
-            loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, _play_ready_sound)
 
         start = time.perf_counter()
+
+        # Reset VAD state from any prior recording (LSTM hidden state + context)
+        _vad.reset()
 
         # Record audio with VAD
         audio = await _mic_capture.record(
@@ -479,7 +483,6 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
         recording_ms = (time.perf_counter() - start) * 1000
 
         # Transcribe
-        loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None, _stt_engine.transcribe, audio, STT_SAMPLE_RATE
         )
