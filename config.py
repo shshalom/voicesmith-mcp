@@ -7,6 +7,7 @@ Environment variables override individual config values.
 
 import json
 import os
+import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
@@ -207,7 +208,22 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
         },
     }
 
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+    # Atomic write: write to temp file then rename. This prevents
+    # readers (like the installer) from seeing a truncated file if
+    # they read during a write.
+    try:
+        fd, tmp_path = tempfile.mkstemp(
+            dir=path.parent, suffix=".tmp", prefix=".config-"
+        )
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, path)
+    except Exception as e:
+        # Clean up temp file if rename failed
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
     logger.debug(f"Saved config to {path}")
