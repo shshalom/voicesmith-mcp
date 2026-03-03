@@ -26,6 +26,7 @@ class TTSConfig:
     default_voice: str = "am_eric"
     default_speed: float = 1.0
     audio_player: str = "mpv"
+    duck_media: bool = False
 
 
 @dataclass
@@ -99,6 +100,8 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
                     config.tts.default_speed = float(tts["default_speed"])
                 if "audio_player" in tts:
                     config.tts.audio_player = tts["audio_player"]
+                if "duck_media" in tts:
+                    config.tts.duck_media = bool(tts["duck_media"])
 
             # STT config
             if "stt" in data:
@@ -179,6 +182,7 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
             "default_voice": config.tts.default_voice,
             "default_speed": config.tts.default_speed,
             "audio_player": config.tts.audio_player,
+            "duck_media": config.tts.duck_media,
         },
         "stt": {
             "model_size": config.stt.model_size,

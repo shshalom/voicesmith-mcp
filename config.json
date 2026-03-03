@@ -4,7 +4,8 @@
     "voices_path": "~/.local/share/voicesmith-mcp/models/voices-v1.0.bin",
     "default_voice": "am_eric",
     "default_speed": 1.0,
-    "audio_player": "mpv"
+    "audio_player": "mpv",
+    "duck_media": true
   },
   "stt": {
     "model_size": "base",
