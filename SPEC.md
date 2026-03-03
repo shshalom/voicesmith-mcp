@@ -55,7 +55,7 @@ AI Assistant (Claude Code, Cursor, etc.)
 
 ### Transport
 
-The server uses **stdio** transport (JSON-RPC over stdin/stdout). This is the standard for Claude Code and most MCP clients. Each IDE session spawns its own server process. Two concurrent sessions = two separate processes (~450MB each), with independent registries and queues. They do not collide.
+The server uses **stdio** transport (JSON-RPC over stdin/stdout). On macOS, the IDE spawns `VoiceSmithMCP.app` (a native C launcher) which forks the Python server and forwards signals — this ensures the process runs inside a signed app bundle for TCC microphone permission. On Linux, the Python server is spawned directly. Each IDE session spawns its own server process. Two concurrent sessions = two separate processes (~450MB each), with independent registries and queues. They do not collide.
 
 ### Logging
 
@@ -431,6 +431,36 @@ The `confidence` field in `listen` responses is computed as `exp(avg_logprob)` w
 | Silence threshold | 1.5s (configurable) |
 | Chunk size | 512 samples at 16kHz (32ms) + 64-sample context window |
 
+### Microphone Capture: Three Backends
+
+On macOS, the Python process running through a terminal doesn't get a microphone permission dialog — macOS TCC (Transparency, Consent, and Control) silently denies it, resulting in all-zero audio. The fix: native C audio capture inside a signed app bundle (`VoiceSmithMCP.app`) with `NSMicrophoneUsageDescription`.
+
+| Backend | Platform | How it works | When used |
+|---------|----------|--------------|-----------|
+| **Socket (primary)** | macOS | `audio-service` LaunchAgent streams CoreAudio via Unix socket (`/tmp/voicesmith-audio.sock`) | macOS with LaunchAgent installed |
+| **Subprocess (fallback)** | macOS | `audio-capture` binary spawned by Python, streams via stdout | macOS without LaunchAgent |
+| **sounddevice (fallback)** | Linux/other | PortAudio-based capture via sounddevice library | Non-macOS platforms |
+
+All three backends produce identical output: **16kHz mono float32 in 512-sample chunks** (matching Silero VAD requirements). The VAD detection loop is shared across all backends.
+
+#### App Bundle Architecture (macOS)
+
+```
+VoiceSmithMCP.app/
+├── Contents/
+│   ├── Info.plist              # NSMicrophoneUsageDescription for TCC
+│   └── MacOS/
+│       ├── VoiceSmithMCP       # MCP launcher (forks Python server)
+│       ├── audio-service       # LaunchAgent daemon (CoreAudio → Unix socket)
+│       └── audio-capture       # Subprocess recorder (CoreAudio → stdout)
+```
+
+The installer compiles these from C source, codesigns the bundle with `com.voicesmith-mcp.launcher`, and installs a LaunchAgent (`com.voicesmith-mcp.audio`) that runs `audio-service` under launchd. Because launchd is the parent (not the terminal), macOS TCC attributes mic access to the app bundle and shows a proper permission dialog.
+
+#### TCC Denial Detection
+
+If the mic returns all-zero samples for ~320ms, the server detects silent audio (TCC denial) and returns an error with a helpful message pointing the user to System Settings > Privacy & Security > Microphone.
+
 ### How `listen` Works Internally
 
 ```
@@ -438,22 +468,27 @@ AI calls listen(timeout=15)
     │
     ▼
 ┌─────────────────────────────────┐
-│  1. Activate microphone          │
-│     Show 🎙️ indicator           │
+│  1. Play Tink ready sound        │
 ├─────────────────────────────────┤
-│  2. Silero VAD monitors audio    │
+│  2. Reset VAD state              │
+│     Open mic (socket/subprocess/ │
+│     sounddevice)                 │
+│     Flush first 200ms (speaker   │
+│     bleed prevention)            │
+├─────────────────────────────────┤
+│  3. Silero VAD monitors audio    │
 │     Waiting for speech...        │
 ├─────────────────────────────────┤
-│  3. Speech detected              │
+│  4. Speech detected              │
 │     Recording audio buffer       │
 ├─────────────────────────────────┤
-│  4. 1.5s silence detected        │
+│  5. 1.5s silence detected        │
 │     Stop recording               │
 ├─────────────────────────────────┤
-│  5. faster-whisper transcribes   │
+│  6. faster-whisper transcribes   │
 │     (~0.2s for short commands)   │
 ├─────────────────────────────────┤
-│  6. Return text to AI            │
+│  7. Return text to AI            │
 │     { "text": "Go with REST" }   │
 └─────────────────────────────────┘
 ```
@@ -689,9 +724,10 @@ The raw template is at `templates/voice-rules.md` with `{{MAIN_AGENT}}` placehol
 
 ### System Requirements
 - macOS (Apple Silicon recommended) or Linux
+- **Xcode Command Line Tools** (macOS only — needed to compile the native audio launcher)
 - ~450MB RAM for loaded models (300MB TTS + 150MB STT)
 - ~500MB disk for model files
-- Microphone access (for STT)
+- Microphone access (for STT — on macOS, the installer builds `VoiceSmithMCP.app` which triggers a proper TCC permission dialog)
 
 ---
 
@@ -843,6 +879,12 @@ voicesmith-mcp/
 │   └── utils.js           # Shared helpers (Python discovery, IDE configs, logging)
 ├── hooks/
 │   └── session-start.sh   # SessionStart hook — discovers assigned voice name
+├── launcher/
+│   ├── main.c             # Native MCP launcher (forks Python, forwards signals)
+│   ├── audio_service.c    # LaunchAgent audio daemon (CoreAudio → Unix socket)
+│   ├── mic_capture.c      # Subprocess audio recorder (CoreAudio → stdout fallback)
+│   ├── Info.plist         # App bundle metadata with NSMicrophoneUsageDescription
+│   └── com.voicesmith-mcp.audio.plist  # LaunchAgent config for audio service
 ├── install.sh             # Alternative setup script (full parity with npx installer)
 ├── config.json            # Default server configuration
 ├── server.py              # MCP server entry point (11 tools via FastMCP)
@@ -859,7 +901,7 @@ voicesmith-mcp/
 ├── stt/
 │   ├── __init__.py
 │   ├── whisper_engine.py  # faster-whisper wrapper (model loading, transcription)
-│   ├── mic_capture.py     # Microphone recording with sounddevice (blocksize=512)
+│   ├── mic_capture.py     # Microphone recording (socket/subprocess/sounddevice backends)
 │   └── vad.py             # Silero VAD via ONNX Runtime (configurable threshold)
 ├── templates/
 │   └── voice-rules.md     # Voice behavior template ({{MAIN_AGENT}} placeholder)
