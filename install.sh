@@ -183,30 +183,55 @@ else:
     fi
 fi
 
-# ─── macOS mic launcher (app bundle wrapper for TCC attribution) ─────────
-# macOS TCC attributes mic permission to the "responsible process" — the
-# nearest bundled ancestor in the process tree.  When Claude Code is run
-# from a terminal like Commander that lacks NSMicrophoneUsageDescription,
-# the mic is silently denied.  We fix this by compiling a minimal app bundle
-# (VoiceSmithMCP.app) that Claude Code invokes instead of python3 directly.
-# The bundle has NSMicrophoneUsageDescription, so TCC shows the dialog for it
-# regardless of which terminal is in use.
+# ─── macOS app bundle (TCC mic attribution fix) ───────────────────────────
+# macOS TCC attributes mic permission to the "responsible process".  When
+# Python is run from a terminal like Commander, Homebrew's Python.app takes
+# TCC attribution (it lacks NSMicrophoneUsageDescription → silent deny).
+#
+# Fix: build VoiceSmithMCP.app with two binaries inside Contents/MacOS/:
+#   VoiceSmithMCP  — launcher: Claude Code invokes this; it fork+execs Python
+#   audio-capture  — CoreAudio recorder: Python spawns this to capture mic;
+#                    because it's inside VoiceSmithMCP.app, TCC shows the
+#                    dialog for our bundle rather than for Python.app
 if [ "$(uname)" = "Darwin" ]; then
     LAUNCHER_SRC="$SCRIPT_DIR/launcher/main.c"
+    AUDIO_CAPTURE_SRC="$SCRIPT_DIR/launcher/mic_capture.c"
     LAUNCHER_PLIST="$SCRIPT_DIR/launcher/Info.plist"
     APP_BUNDLE="$INSTALL_DIR/VoiceSmithMCP.app"
     APP_BINARY="$APP_BUNDLE/Contents/MacOS/VoiceSmithMCP"
+    AUDIO_CAPTURE_BINARY="$APP_BUNDLE/Contents/MacOS/audio-capture"
 
     if [ -f "$LAUNCHER_SRC" ] && [ -f "$LAUNCHER_PLIST" ] && command -v clang &>/dev/null; then
         mkdir -p "$APP_BUNDLE/Contents/MacOS"
         cp "$LAUNCHER_PLIST" "$APP_BUNDLE/Contents/Info.plist"
+
+        # Build the MCP launcher (stdio proxy between Claude Code and Python)
+        launcher_ok=false
         if clang \
             "-DVOICESMITH_PYTHON=\"$VENV_DIR/bin/python3\"" \
             "-DVOICESMITH_SERVER=\"$INSTALL_DIR/server.py\"" \
-            "$LAUNCHER_SRC" -o "$APP_BINARY" 2>/dev/null \
-            && codesign -s - "$APP_BUNDLE" 2>/dev/null; then
+            "$LAUNCHER_SRC" -o "$APP_BINARY" 2>/dev/null; then
+            launcher_ok=true
+        fi
+
+        # Build the CoreAudio mic recorder (Python spawns this to bypass
+        # Python.app's TCC attribution)
+        if $launcher_ok && [ -f "$AUDIO_CAPTURE_SRC" ]; then
+            clang \
+                -framework AudioToolbox \
+                -framework CoreFoundation \
+                "$AUDIO_CAPTURE_SRC" -o "$AUDIO_CAPTURE_BINARY" 2>/dev/null || true
+        fi
+
+        # Sign the complete bundle (--force required when re-signing after
+        # adding a second binary to Contents/MacOS/)
+        if $launcher_ok && codesign -s - --force "$APP_BUNDLE" 2>/dev/null; then
             LAUNCHER_BINARY="$APP_BINARY"
-            ok "macOS mic launcher built ($APP_BUNDLE)"
+            if [ -f "$AUDIO_CAPTURE_BINARY" ]; then
+                ok "macOS app bundle built with mic launcher + audio-capture"
+            else
+                ok "macOS mic launcher built (audio-capture skipped)"
+            fi
         else
             warn "Launcher build failed — microphone will rely on terminal's TCC permission"
         fi
