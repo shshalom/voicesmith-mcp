@@ -82,7 +82,7 @@ def _init_tts(config: AppConfig):
 
     try:
         _tts_engine = KokoroEngine(config.tts.model_path, config.tts.voices_path)
-        _audio_player = AudioPlayer(config.tts.audio_player)
+        _audio_player = AudioPlayer(config.tts.audio_player, duck_media=config.tts.duck_media)
         _speech_queue = SpeechQueue(_tts_engine, _audio_player)
         logger.info("TTS subsystem initialized")
     except TTSEngineError as e:
