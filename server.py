@@ -48,11 +48,11 @@ from tts.media_duck import duck, unduck, is_bluetooth_output
 async def _deferred_unduck(paused_apps: list[str], delay: float = 0.3) -> None:
     """Unduck after a brief delay so the MCP response reaches the client first.
 
-    On Bluetooth output, extends the delay to 2s to allow for the HFP → A2C
+    On Bluetooth output, extends the delay to 3s to allow for the HFP → A2DP
     codec switch that macOS performs when the microphone session ends.
     """
     if is_bluetooth_output():
-        delay = max(delay, 2.0)
+        delay = max(delay, 3.0)
     await asyncio.sleep(delay)
     unduck(paused_apps)
 
