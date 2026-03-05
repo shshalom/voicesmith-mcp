@@ -34,7 +34,7 @@
 | 11 | 🔴 | Menu bar indicator for wake listener | Show mic state (active/recording/disabled), click to toggle. Use `rumps` (Python) or native Swift. |
 | 12 | 🟢 | Session preheat / agent intro | AI calls `status` on first response, discovers assigned name, speaks intro. Combined with name discovery. |
 | 13 | 🟢 | Tink ready sound after wake word | Plays before recording starts |
-| 14 | 🟢 | Timeout nudge on listen | Fixed — speak_then_listen speaks "I didn't catch that. Go ahead and type it." on timeout, one nudge only |
+| 14 | 🟢 | Timeout nudge on listen | Configurable via `stt.nudge_on_timeout` (default off). When enabled, speak_then_listen speaks "I didn't catch that." on timeout. |
 
 ### Installer
 | # | Status | Feature | Notes |
@@ -48,8 +48,8 @@
 | # | Status | Feature | Notes |
 |---|--------|---------|-------|
 | 19 | 🟢 | Questions trigger speak_then_listen | Mandatory for input questions, not rhetorical |
-| 20 | 🟢 | Sub-agents check get_voice_registry before naming | Documented in voice rules |
-| 21 | 🟢 | Bookend pattern (opening + closing voice) | Opening non-blocking, closing mandatory |
+| 20 | 🟢 | Sub-agents pick Kokoro voice names | Documented in voice rules. Mandatory get_voice_registry call removed — agents pick names directly. |
+| 21 | 🟢 | Speaking pattern (optional opening + closing voice) | Opening is optional (only when meaningful). Closing mandatory, block: true. |
 
 ---
 
