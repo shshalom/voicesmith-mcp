@@ -94,7 +94,7 @@ done
 for d in tts stt templates; do
     if [ -d "$SCRIPT_DIR/$d" ]; then
         mkdir -p "$INSTALL_DIR/$d"
-        cp "$SCRIPT_DIR/$d/"* "$INSTALL_DIR/$d/"
+        find "$SCRIPT_DIR/$d" -maxdepth 1 -type f -exec cp {} "$INSTALL_DIR/$d/" \;
     fi
 done
 ok "Server files copied to $INSTALL_DIR"

@@ -64,6 +64,7 @@ _config: AppConfig = None
 _muted = False
 _listen_cancel_event: asyncio.Event = None
 _listen_active = False
+_suppress_duck = False  # Set by speak_then_listen to prevent inner duck/unduck gaps
 _startup_time = time.time()
 _last_tool_call = time.time()  # Updated on every MCP tool call
 _session_info: dict = None
@@ -455,7 +456,8 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
         logger.info(f"Listening (prompt: {prompt})")
 
     # Duck media while recording so the mic doesn't pick up playback
-    paused_apps = duck() if _config and _config.tts.duck_media else []
+    # Skip if speak_then_listen already holds the duck
+    paused_apps = duck() if (_config and _config.tts.duck_media and not _suppress_duck) else []
 
     try:
         loop = asyncio.get_running_loop()
@@ -529,19 +531,38 @@ async def speak_then_listen(
         timeout: Max seconds to wait for response (default 15).
         silence_threshold: Seconds of silence before stopping (default 1.5).
     """
-    speak_result = await speak(name, text, speed, block=True)
+    global _suppress_duck
 
-    if not speak_result.get("success"):
-        return {"speak": speak_result, "listen": {"success": False, "error": "skipped"}}
+    # Duck once for the entire speak+listen operation to avoid a
+    # brief unduck gap between speak finishing and listen starting.
+    should_duck = _config and _config.tts.duck_media
+    paused_apps = duck() if should_duck else []
 
-    listen_result = await listen(timeout=timeout, silence_threshold=silence_threshold)
+    # Suppress inner ducking in SpeechQueue and listen()
+    saved_queue_duck = _speech_queue._duck_media if _speech_queue else False
+    if _speech_queue and should_duck:
+        _speech_queue._duck_media = False
+    _suppress_duck = True
 
-    # If listen timed out, speak a nudge and fall back to text
-    if listen_result.get("error") == "timeout":
-        nudge_result = await speak(name, "I didn't catch that. Go ahead and type it.", speed, block=True)
-        listen_result["nudge_spoken"] = nudge_result.get("success", False)
+    try:
+        speak_result = await speak(name, text, speed, block=True)
 
-    return {"speak": speak_result, "listen": listen_result}
+        if not speak_result.get("success"):
+            return {"speak": speak_result, "listen": {"success": False, "error": "skipped"}}
+
+        listen_result = await listen(timeout=timeout, silence_threshold=silence_threshold)
+
+        # If listen timed out, speak a nudge and fall back to text
+        if listen_result.get("error") == "timeout":
+            nudge_result = await speak(name, "I didn't catch that. Go ahead and type it.", speed, block=True)
+            listen_result["nudge_spoken"] = nudge_result.get("success", False)
+
+        return {"speak": speak_result, "listen": listen_result}
+    finally:
+        _suppress_duck = False
+        if _speech_queue:
+            _speech_queue._duck_media = saved_queue_duck
+        unduck(paused_apps)
 
 
 @mcp.tool()
