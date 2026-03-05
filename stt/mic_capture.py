@@ -8,7 +8,7 @@ import socket
 import subprocess
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -94,6 +94,7 @@ class MicCapture:
         timeout: float = 15,
         silence_threshold: float = 1.5,
         cancel_event: Optional[asyncio.Event] = None,
+        on_ready: Optional[Callable[[], None]] = None,
     ) -> Optional[np.ndarray]:
         """Record audio from the microphone until silence is detected.
 
@@ -108,6 +109,9 @@ class MicCapture:
             timeout: Maximum seconds to wait for speech (default 15).
             silence_threshold: Seconds of silence before stopping (default 1.5).
             cancel_event: Optional asyncio.Event to cancel recording.
+            on_ready: Optional callback invoked once the mic is live and
+                      ready to capture.  Called after hardware warm-up /
+                      flush but before the VAD loop starts.
 
         Returns:
             Numpy array of recorded audio, or None if cancelled/timeout.
@@ -124,17 +128,17 @@ class MicCapture:
         if platform.system() == "Darwin":
             if _launchagent_available():
                 return await self._record_via_socket(
-                    vad, timeout, silence_threshold, cancel_event
+                    vad, timeout, silence_threshold, cancel_event, on_ready
                 )
             # Legacy: subprocess fallback for installs without the LaunchAgent.
             audio_capture_bin = _find_app_binary("audio-service") or _find_app_binary("audio-capture")
             if audio_capture_bin:
                 return await self._record_via_subprocess(
-                    audio_capture_bin, vad, timeout, silence_threshold, cancel_event
+                    audio_capture_bin, vad, timeout, silence_threshold, cancel_event, on_ready
                 )
 
         return await self._record_via_sounddevice(
-            vad, timeout, silence_threshold, cancel_event
+            vad, timeout, silence_threshold, cancel_event, on_ready
         )
 
     # ── LaunchAgent socket backend (macOS primary) ─────────────────────────────
@@ -145,6 +149,7 @@ class MicCapture:
         timeout: float,
         silence_threshold: float,
         cancel_event: Optional[asyncio.Event],
+        on_ready: Optional[Callable[[], None]] = None,
     ) -> Optional[np.ndarray]:
         """Record via the VoiceSmithMCP audio LaunchAgent (Unix socket).
 
@@ -192,7 +197,10 @@ class MicCapture:
         logger.info("Microphone recording started (audio-service socket)")
 
         try:
-            self._flush_queue(int(0.2 * self._sample_rate / _CHUNK_SAMPLES))
+            # Flush 2 chunks (~64ms) for AudioQueue hardware settle.
+            self._flush_queue(2)
+            if on_ready:
+                on_ready()
             return await self._run_vad_loop(vad, timeout, silence_threshold, cancel_event)
         finally:
             sock.close()  # signals service to stop sending for this session
@@ -208,6 +216,7 @@ class MicCapture:
         timeout: float,
         silence_threshold: float,
         cancel_event: Optional[asyncio.Event],
+        on_ready: Optional[Callable[[], None]] = None,
     ) -> Optional[np.ndarray]:
         """Record using a CoreAudio binary inside VoiceSmithMCP.app (legacy)."""
         self._recording = True
@@ -241,7 +250,9 @@ class MicCapture:
         reader_thread.start()
 
         try:
-            self._flush_queue(int(0.2 * self._sample_rate / _CHUNK_SAMPLES))
+            self._flush_queue(2)
+            if on_ready:
+                on_ready()
             return await self._run_vad_loop(vad, timeout, silence_threshold, cancel_event)
         finally:
             proc.terminate()
@@ -260,6 +271,7 @@ class MicCapture:
         timeout: float,
         silence_threshold: float,
         cancel_event: Optional[asyncio.Event],
+        on_ready: Optional[Callable[[], None]] = None,
     ) -> Optional[np.ndarray]:
         """Record using sounddevice / PortAudio (fallback for non-macOS)."""
         try:
@@ -283,7 +295,9 @@ class MicCapture:
             stream.start()
             logger.info("Microphone recording started (sounddevice)")
 
-            self._flush_queue(int(0.2 * self._sample_rate / _CHUNK_SAMPLES), chunk_timeout=0.1)
+            self._flush_queue(2, chunk_timeout=0.1)
+            if on_ready:
+                on_ready()
             return await self._run_vad_loop(vad, timeout, silence_threshold, cancel_event)
         except MicCaptureError:
             raise

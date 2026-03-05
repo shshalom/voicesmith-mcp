@@ -474,15 +474,14 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
     try:
         loop = asyncio.get_running_loop()
 
-        # Play ready sound so the user knows to start speaking
-        # Skip for push-to-talk (HTTP) — it has its own beep
-        if prompt != "push-to-talk":
-            await loop.run_in_executor(None, _play_ready_sound)
-
         start = time.perf_counter()
 
         # Reset VAD state from any prior recording (LSTM hidden state + context)
         _vad.reset()
+
+        # Play the ready sound AFTER the mic is live (via on_ready callback)
+        # so the user doesn't start speaking into a dead mic.
+        ready_cb = _play_ready_sound if prompt != "push-to-talk" else None
 
         # Record audio with VAD
         audio = await _mic_capture.record(
@@ -490,6 +489,7 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
             timeout=timeout,
             silence_threshold=silence_threshold,
             cancel_event=_listen_cancel_event,
+            on_ready=ready_cb,
         )
 
         if _listen_cancel_event.is_set():
@@ -564,11 +564,6 @@ async def speak_then_listen(
             return {"speak": speak_result, "listen": {"success": False, "error": "skipped"}}
 
         listen_result = await listen(timeout=timeout, silence_threshold=silence_threshold)
-
-        # If listen timed out, speak a nudge and fall back to text
-        if listen_result.get("error") == "timeout":
-            nudge_result = await speak(name, "I didn't catch that. Go ahead and type it.", speed, block=True)
-            listen_result["nudge_spoken"] = nudge_result.get("success", False)
 
         return {"speak": speak_result, "listen": listen_result}
     finally:
