@@ -44,6 +44,12 @@ from config import load_config, save_config, get_config_path, AppConfig
 from session_registry import register_session, rename_session, unregister_session
 from tts.media_duck import duck, unduck
 
+
+async def _deferred_unduck(paused_apps: list[str], delay: float = 0.3) -> None:
+    """Unduck after a brief delay so the MCP response reaches the client first."""
+    await asyncio.sleep(delay)
+    unduck(paused_apps)
+
 logger = get_logger("server")
 
 # ─── Global State ─────────────────────────────────────────────────────────────
@@ -506,7 +512,8 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
         logger.error(f"listen failed: {e}")
         return {"success": False, "error": "listen_failed", "message": str(e)}
     finally:
-        unduck(paused_apps)
+        if paused_apps:
+            asyncio.create_task(_deferred_unduck(paused_apps))
         _listen_active = False
         _listen_cancel_event = None
         # Reclaim mic for wake listener
@@ -562,7 +569,8 @@ async def speak_then_listen(
         _suppress_duck = False
         if _speech_queue:
             _speech_queue._duck_media = saved_queue_duck
-        unduck(paused_apps)
+        if paused_apps:
+            asyncio.create_task(_deferred_unduck(paused_apps))
 
 
 @mcp.tool()
