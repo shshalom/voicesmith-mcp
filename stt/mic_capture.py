@@ -8,18 +8,20 @@ import socket
 import subprocess
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 
 from shared import MicCaptureError, STT_SAMPLE_RATE, get_logger
 from stt.vad import VoiceActivityDetector
+from tts.media_duck import is_bluetooth_output
 
 logger = get_logger("stt.mic")
 
 _CHUNK_SAMPLES = 512        # Silero VAD requires exactly 512-sample chunks at 16kHz
 _CHUNK_BYTES   = _CHUNK_SAMPLES * 4   # float32 = 4 bytes/sample → 2048 bytes/chunk
-_ZERO_CHECK_CHUNKS = 10    # ~320ms of silence before detecting TCC denial
+_ZERO_CHECK_CHUNKS = 25    # ~800ms — exceeds CoreAudio cold-start latency (~544ms)
+_ZERO_CHECK_CHUNKS_BT = 75 # ~2.4s — Bluetooth A2DP→HFP codec switch can take 1-2s
 
 _AUDIO_SERVICE_SOCKET  = "/tmp/voicesmith-audio.sock"
 _LAUNCHAGENT_LABEL     = "com.voicesmith-mcp.audio"
@@ -92,6 +94,7 @@ class MicCapture:
         timeout: float = 15,
         silence_threshold: float = 1.5,
         cancel_event: Optional[asyncio.Event] = None,
+        on_ready: Optional[Callable[[], None]] = None,
     ) -> Optional[np.ndarray]:
         """Record audio from the microphone until silence is detected.
 
@@ -106,6 +109,9 @@ class MicCapture:
             timeout: Maximum seconds to wait for speech (default 15).
             silence_threshold: Seconds of silence before stopping (default 1.5).
             cancel_event: Optional asyncio.Event to cancel recording.
+            on_ready: Optional callback invoked once the mic is live and
+                      ready to capture.  Called after hardware warm-up /
+                      flush but before the VAD loop starts.
 
         Returns:
             Numpy array of recorded audio, or None if cancelled/timeout.
@@ -122,17 +128,17 @@ class MicCapture:
         if platform.system() == "Darwin":
             if _launchagent_available():
                 return await self._record_via_socket(
-                    vad, timeout, silence_threshold, cancel_event
+                    vad, timeout, silence_threshold, cancel_event, on_ready
                 )
             # Legacy: subprocess fallback for installs without the LaunchAgent.
             audio_capture_bin = _find_app_binary("audio-service") or _find_app_binary("audio-capture")
             if audio_capture_bin:
                 return await self._record_via_subprocess(
-                    audio_capture_bin, vad, timeout, silence_threshold, cancel_event
+                    audio_capture_bin, vad, timeout, silence_threshold, cancel_event, on_ready
                 )
 
         return await self._record_via_sounddevice(
-            vad, timeout, silence_threshold, cancel_event
+            vad, timeout, silence_threshold, cancel_event, on_ready
         )
 
     # ── LaunchAgent socket backend (macOS primary) ─────────────────────────────
@@ -143,6 +149,7 @@ class MicCapture:
         timeout: float,
         silence_threshold: float,
         cancel_event: Optional[asyncio.Event],
+        on_ready: Optional[Callable[[], None]] = None,
     ) -> Optional[np.ndarray]:
         """Record via the VoiceSmithMCP audio LaunchAgent (Unix socket).
 
@@ -190,7 +197,10 @@ class MicCapture:
         logger.info("Microphone recording started (audio-service socket)")
 
         try:
-            self._flush_queue(int(0.2 * self._sample_rate / _CHUNK_SAMPLES))
+            # Flush 2 chunks (~64ms) for AudioQueue hardware settle.
+            self._flush_queue(2)
+            if on_ready:
+                on_ready()
             return await self._run_vad_loop(vad, timeout, silence_threshold, cancel_event)
         finally:
             sock.close()  # signals service to stop sending for this session
@@ -206,6 +216,7 @@ class MicCapture:
         timeout: float,
         silence_threshold: float,
         cancel_event: Optional[asyncio.Event],
+        on_ready: Optional[Callable[[], None]] = None,
     ) -> Optional[np.ndarray]:
         """Record using a CoreAudio binary inside VoiceSmithMCP.app (legacy)."""
         self._recording = True
@@ -239,7 +250,9 @@ class MicCapture:
         reader_thread.start()
 
         try:
-            self._flush_queue(int(0.2 * self._sample_rate / _CHUNK_SAMPLES))
+            self._flush_queue(2)
+            if on_ready:
+                on_ready()
             return await self._run_vad_loop(vad, timeout, silence_threshold, cancel_event)
         finally:
             proc.terminate()
@@ -258,6 +271,7 @@ class MicCapture:
         timeout: float,
         silence_threshold: float,
         cancel_event: Optional[asyncio.Event],
+        on_ready: Optional[Callable[[], None]] = None,
     ) -> Optional[np.ndarray]:
         """Record using sounddevice / PortAudio (fallback for non-macOS)."""
         try:
@@ -281,7 +295,9 @@ class MicCapture:
             stream.start()
             logger.info("Microphone recording started (sounddevice)")
 
-            self._flush_queue(int(0.2 * self._sample_rate / _CHUNK_SAMPLES), chunk_timeout=0.1)
+            self._flush_queue(2, chunk_timeout=0.1)
+            if on_ready:
+                on_ready()
             return await self._run_vad_loop(vad, timeout, silence_threshold, cancel_event)
         except MicCaptureError:
             raise
@@ -330,6 +346,8 @@ class MicCapture:
         speech_detected = False
         silence_duration = 0.0
         zero_check_done = False
+        # Bluetooth A2DP→HFP switch delivers zeros for up to ~2s
+        zero_threshold = _ZERO_CHECK_CHUNKS_BT if is_bluetooth_output() else _ZERO_CHECK_CHUNKS
         start_time = loop.time()
 
         while not self._stop_flag:
@@ -354,7 +372,7 @@ class MicCapture:
 
             chunks.append(chunk)
 
-            if not zero_check_done and len(chunks) >= _ZERO_CHECK_CHUNKS:
+            if not zero_check_done and len(chunks) >= zero_threshold:
                 zero_check_done = True
                 if all(np.max(np.abs(c)) == 0.0 for c in chunks):
                     raise MicCaptureError(self._zero_audio_message())

@@ -14,6 +14,8 @@ Usage:
     unduck(paused)         # resume only what we paused
 """
 
+import ctypes
+import ctypes.util
 import platform
 import subprocess
 
@@ -87,6 +89,66 @@ tell application "{target}"
         end repeat
     end repeat
 end tell"""
+
+
+# ── Bluetooth detection (macOS CoreAudio) ────────────────────────────────────
+
+def is_bluetooth_output() -> bool:
+    """Return True if the default audio output is a Bluetooth device.
+
+    Uses CoreAudio's AudioObjectGetPropertyData to check the transport type
+    of the default output device.  Returns False on non-macOS or on error.
+    """
+    if platform.system() != "Darwin":
+        return False
+
+    try:
+        lib_path = ctypes.util.find_library("CoreAudio")
+        if not lib_path:
+            return False
+        ca = ctypes.cdll.LoadLibrary(lib_path)
+
+        class _AudioObjectPropertyAddress(ctypes.Structure):
+            _fields_ = [
+                ("mSelector", ctypes.c_uint32),
+                ("mScope", ctypes.c_uint32),
+                ("mElement", ctypes.c_uint32),
+            ]
+
+        # CoreAudio FourCC constants
+        _SYS_OBJ   = 1                                            # kAudioObjectSystemObject
+        _SCOPE_G   = int.from_bytes(b"glob", "big")               # kAudioObjectPropertyScopeGlobal
+        _ELEM_M    = 0                                             # kAudioObjectPropertyElementMain
+        _DEF_OUT   = int.from_bytes(b"dOut", "big")                # kAudioHardwarePropertyDefaultOutputDevice
+        _TRANS     = int.from_bytes(b"tran", "big")                # kAudioDevicePropertyTransportType
+        _BT        = int.from_bytes(b"blue", "big")                # kAudioDeviceTransportTypeBluetooth
+        _BT_LE     = int.from_bytes(b"blea", "big")                # kAudioDeviceTransportTypeBluetoothLE
+
+        # Get default output device ID
+        addr = _AudioObjectPropertyAddress(_DEF_OUT, _SCOPE_G, _ELEM_M)
+        device_id = ctypes.c_uint32(0)
+        size = ctypes.c_uint32(4)
+        err = ca.AudioObjectGetPropertyData(
+            _SYS_OBJ, ctypes.byref(addr), 0, None,
+            ctypes.byref(size), ctypes.byref(device_id),
+        )
+        if err != 0:
+            return False
+
+        # Get transport type of that device
+        addr.mSelector = _TRANS
+        transport = ctypes.c_uint32(0)
+        size = ctypes.c_uint32(4)
+        err = ca.AudioObjectGetPropertyData(
+            device_id.value, ctypes.byref(addr), 0, None,
+            ctypes.byref(size), ctypes.byref(transport),
+        )
+        if err != 0:
+            return False
+
+        return transport.value in (_BT, _BT_LE)
+    except Exception:
+        return False
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

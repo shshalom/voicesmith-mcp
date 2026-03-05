@@ -42,6 +42,19 @@ from shared import (
 )
 from config import load_config, save_config, get_config_path, AppConfig
 from session_registry import register_session, rename_session, unregister_session
+from tts.media_duck import duck, unduck, is_bluetooth_output
+
+
+async def _deferred_unduck(paused_apps: list[str], delay: float = 0.3) -> None:
+    """Unduck after a brief delay so the MCP response reaches the client first.
+
+    On Bluetooth output, extends the delay to 3s to allow for the HFP → A2DP
+    codec switch that macOS performs when the microphone session ends.
+    """
+    if is_bluetooth_output():
+        delay = max(delay, 3.0)
+    await asyncio.sleep(delay)
+    unduck(paused_apps)
 
 logger = get_logger("server")
 
@@ -63,6 +76,7 @@ _config: AppConfig = None
 _muted = False
 _listen_cancel_event: asyncio.Event = None
 _listen_active = False
+_suppress_duck = False  # Set by speak_then_listen to prevent inner duck/unduck gaps
 _startup_time = time.time()
 _last_tool_call = time.time()  # Updated on every MCP tool call
 _session_info: dict = None
@@ -82,8 +96,8 @@ def _init_tts(config: AppConfig):
 
     try:
         _tts_engine = KokoroEngine(config.tts.model_path, config.tts.voices_path)
-        _audio_player = AudioPlayer(config.tts.audio_player, duck_media=config.tts.duck_media)
-        _speech_queue = SpeechQueue(_tts_engine, _audio_player)
+        _audio_player = AudioPlayer(config.tts.audio_player)
+        _speech_queue = SpeechQueue(_tts_engine, _audio_player, duck_media=config.tts.duck_media)
         logger.info("TTS subsystem initialized")
     except TTSEngineError as e:
         logger.error(f"TTS initialization failed: {e}")
@@ -453,18 +467,21 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
     if prompt:
         logger.info(f"Listening (prompt: {prompt})")
 
+    # Duck media while recording so the mic doesn't pick up playback
+    # Skip if speak_then_listen already holds the duck
+    paused_apps = duck() if (_config and _config.tts.duck_media and not _suppress_duck) else []
+
     try:
         loop = asyncio.get_running_loop()
-
-        # Play ready sound so the user knows to start speaking
-        # Skip for push-to-talk (HTTP) — it has its own beep
-        if prompt != "push-to-talk":
-            await loop.run_in_executor(None, _play_ready_sound)
 
         start = time.perf_counter()
 
         # Reset VAD state from any prior recording (LSTM hidden state + context)
         _vad.reset()
+
+        # Play the ready sound AFTER the mic is live (via on_ready callback)
+        # so the user doesn't start speaking into a dead mic.
+        ready_cb = _play_ready_sound if prompt != "push-to-talk" else None
 
         # Record audio with VAD
         audio = await _mic_capture.record(
@@ -472,6 +489,7 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
             timeout=timeout,
             silence_threshold=silence_threshold,
             cancel_event=_listen_cancel_event,
+            on_ready=ready_cb,
         )
 
         if _listen_cancel_event.is_set():
@@ -500,6 +518,8 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
         logger.error(f"listen failed: {e}")
         return {"success": False, "error": "listen_failed", "message": str(e)}
     finally:
+        if paused_apps:
+            asyncio.create_task(_deferred_unduck(paused_apps))
         _listen_active = False
         _listen_cancel_event = None
         # Reclaim mic for wake listener
@@ -524,19 +544,34 @@ async def speak_then_listen(
         timeout: Max seconds to wait for response (default 15).
         silence_threshold: Seconds of silence before stopping (default 1.5).
     """
-    speak_result = await speak(name, text, speed, block=True)
+    global _suppress_duck
 
-    if not speak_result.get("success"):
-        return {"speak": speak_result, "listen": {"success": False, "error": "skipped"}}
+    # Duck once for the entire speak+listen operation to avoid a
+    # brief unduck gap between speak finishing and listen starting.
+    should_duck = _config and _config.tts.duck_media
+    paused_apps = duck() if should_duck else []
 
-    listen_result = await listen(timeout=timeout, silence_threshold=silence_threshold)
+    # Suppress inner ducking in SpeechQueue and listen()
+    saved_queue_duck = _speech_queue._duck_media if _speech_queue else False
+    if _speech_queue and should_duck:
+        _speech_queue._duck_media = False
+    _suppress_duck = True
 
-    # If listen timed out, speak a nudge and fall back to text
-    if listen_result.get("error") == "timeout":
-        nudge_result = await speak(name, "I didn't catch that. Go ahead and type it.", speed, block=True)
-        listen_result["nudge_spoken"] = nudge_result.get("success", False)
+    try:
+        speak_result = await speak(name, text, speed, block=True)
 
-    return {"speak": speak_result, "listen": listen_result}
+        if not speak_result.get("success"):
+            return {"speak": speak_result, "listen": {"success": False, "error": "skipped"}}
+
+        listen_result = await listen(timeout=timeout, silence_threshold=silence_threshold)
+
+        return {"speak": speak_result, "listen": listen_result}
+    finally:
+        _suppress_duck = False
+        if _speech_queue:
+            _speech_queue._duck_media = saved_queue_duck
+        if paused_apps:
+            asyncio.create_task(_deferred_unduck(paused_apps))
 
 
 @mcp.tool()

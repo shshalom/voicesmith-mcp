@@ -2,6 +2,8 @@
 
 import time
 
+import numpy as np
+
 from shared import SynthesisResult, TTSEngineError, ALL_VOICE_IDS, SAMPLE_RATE, get_logger
 
 logger = get_logger("tts.kokoro")
@@ -46,6 +48,11 @@ class KokoroEngine:
             start = time.perf_counter()
             samples, sample_rate = self._model.create(text, voice=voice_id, speed=speed)
             synthesis_ms = (time.perf_counter() - start) * 1000
+
+            # Pad 100ms silence — kokoro-onnx trim() snaps to 512-sample hops
+            # (~21ms at 24kHz) which can clip the trailing edge of the last phoneme.
+            pad = int(sample_rate * 0.10)
+            samples = np.concatenate([samples, np.zeros(pad, dtype=samples.dtype)])
 
             duration_ms = (len(samples) / sample_rate) * 1000
 

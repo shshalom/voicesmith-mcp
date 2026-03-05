@@ -6,6 +6,7 @@ import time
 from shared import SpeakResult, MAX_CHUNK_LENGTH, get_logger
 from tts.kokoro_engine import KokoroEngine
 from tts.audio_player import AudioPlayer
+from tts.media_duck import duck, unduck
 
 logger = get_logger("tts.speech_queue")
 
@@ -13,9 +14,10 @@ logger = get_logger("tts.speech_queue")
 class SpeechQueue:
     """Manages sequential speech synthesis and playback."""
 
-    def __init__(self, engine: KokoroEngine, player: AudioPlayer) -> None:
+    def __init__(self, engine: KokoroEngine, player: AudioPlayer, duck_media: bool = False) -> None:
         self._engine = engine
         self._player = player
+        self._duck_media = duck_media
         self._queue: asyncio.Queue = asyncio.Queue()
         self._speaking = False
 
@@ -59,6 +61,9 @@ class SpeechQueue:
         self._speaking = True
         total_duration_ms = 0.0
         total_synthesis_ms = 0.0
+
+        # Duck media for the entire utterance, not per-chunk
+        paused_apps = duck() if self._duck_media else []
 
         try:
             chunks = self.chunk_text(text)
@@ -105,6 +110,7 @@ class SpeechQueue:
                 error=str(e),
             )
         finally:
+            unduck(paused_apps)
             self._speaking = False
 
     def stop(self) -> bool:
