@@ -19,7 +19,9 @@ logger = get_logger("stt.mic")
 
 _CHUNK_SAMPLES = 512        # Silero VAD requires exactly 512-sample chunks at 16kHz
 _CHUNK_BYTES   = _CHUNK_SAMPLES * 4   # float32 = 4 bytes/sample → 2048 bytes/chunk
-_ZERO_CHECK_CHUNKS = 10    # ~320ms of silence before detecting TCC denial
+_ZERO_CHECK_CHUNKS = 25    # ~800ms of silence before detecting TCC denial
+                           # Must exceed CoreAudio cold-start latency (~544ms)
+                           # when a new AudioQueueRef is created per connection
 
 _AUDIO_SERVICE_SOCKET  = "/tmp/voicesmith-audio.sock"
 _LAUNCHAGENT_LABEL     = "com.voicesmith-mcp.audio"

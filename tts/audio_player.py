@@ -10,7 +10,6 @@ import time
 import soundfile as sf
 
 from shared import PlaybackResult, AudioPlayerError, AUDIO_LOCK_PATH, get_logger
-from tts.media_duck import duck, unduck
 
 logger = get_logger("tts.audio_player")
 
@@ -18,9 +17,8 @@ logger = get_logger("tts.audio_player")
 class AudioPlayer:
     """Plays audio samples through an external player process."""
 
-    def __init__(self, player_command: str = "mpv", duck_media: bool = False) -> None:
+    def __init__(self, player_command: str = "mpv") -> None:
         self._player_command = player_command
-        self._duck_media = duck_media
         self._process: subprocess.Popen | None = None
 
         # Detect platform fallback if player_command is not available
@@ -84,23 +82,19 @@ class AudioPlayer:
 
             # Cross-session audio lock: prevents overlapping playback
             # flock is kernel-managed — auto-released on crash, no stale locks
-            paused_apps = duck() if self._duck_media else []
-            try:
-                with open(AUDIO_LOCK_PATH, "w") as lock_file:
-                    fcntl.flock(lock_file, fcntl.LOCK_EX)
+            with open(AUDIO_LOCK_PATH, "w") as lock_file:
+                fcntl.flock(lock_file, fcntl.LOCK_EX)
 
-                    start = time.perf_counter()
-                    self._process = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    self._process.wait()
-                    duration_ms = (time.perf_counter() - start) * 1000
+                start = time.perf_counter()
+                self._process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self._process.wait()
+                duration_ms = (time.perf_counter() - start) * 1000
 
-                # Lock released when lock_file closes
-            finally:
-                unduck(paused_apps)
+            # Lock released when lock_file closes
 
             if self._process.returncode != 0:
                 return PlaybackResult(

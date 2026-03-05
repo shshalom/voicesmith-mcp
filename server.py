@@ -42,6 +42,7 @@ from shared import (
 )
 from config import load_config, save_config, get_config_path, AppConfig
 from session_registry import register_session, rename_session, unregister_session
+from tts.media_duck import duck, unduck
 
 logger = get_logger("server")
 
@@ -82,8 +83,8 @@ def _init_tts(config: AppConfig):
 
     try:
         _tts_engine = KokoroEngine(config.tts.model_path, config.tts.voices_path)
-        _audio_player = AudioPlayer(config.tts.audio_player, duck_media=config.tts.duck_media)
-        _speech_queue = SpeechQueue(_tts_engine, _audio_player)
+        _audio_player = AudioPlayer(config.tts.audio_player)
+        _speech_queue = SpeechQueue(_tts_engine, _audio_player, duck_media=config.tts.duck_media)
         logger.info("TTS subsystem initialized")
     except TTSEngineError as e:
         logger.error(f"TTS initialization failed: {e}")
@@ -453,6 +454,9 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
     if prompt:
         logger.info(f"Listening (prompt: {prompt})")
 
+    # Duck media while recording so the mic doesn't pick up playback
+    paused_apps = duck() if _config and _config.tts.duck_media else []
+
     try:
         loop = asyncio.get_running_loop()
 
@@ -500,6 +504,7 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
         logger.error(f"listen failed: {e}")
         return {"success": False, "error": "listen_failed", "message": str(e)}
     finally:
+        unduck(paused_apps)
         _listen_active = False
         _listen_cancel_event = None
         # Reclaim mic for wake listener
