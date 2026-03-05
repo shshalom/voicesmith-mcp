@@ -71,6 +71,10 @@ The icon updates by polling active sessions every 2 seconds.
 │  Stop Playback                          │  ← action
 │  Test Voice                             │  ← action
 │─────────────────────────────────────────│
+│  ⬆ Update Available (v1.0.19)          │  ← shown only when update exists
+│  Release Notes...                       │  ← opens GitHub releases
+│  Version: v1.0.18                       │  ← current version (dimmed)
+│─────────────────────────────────────────│
 │  Quit VoiceSmith Menu                   │
 └─────────────────────────────────────────┘
 ```
@@ -179,6 +183,33 @@ Read-only submenu showing component status. Polled from the active session's HTT
 |--------|-------------|
 | **Stop Playback** | Calls `POST /stop` on the active session — stops any playing audio and cancels active listen |
 | **Test Voice** | Calls `POST /speak` on the active session with `{"text": "VoiceSmith is working.", "name": "<current_name>"}` |
+
+### 8. Updates
+
+Check for new versions and update in place:
+
+| Item | Display |
+|------|---------|
+| **Current version** | e.g., "v1.0.18" (read from `package.json` in install dir) |
+| **Update available** | Badge on menu bar icon + "Update Available (v1.0.19)" menu item |
+| **Update now** | One-click update — runs `npx voicesmith-mcp install` in background |
+| **Release notes** | Opens GitHub releases page in browser |
+
+**How version check works:**
+1. On app launch and every 6 hours, run `npm view voicesmith-mcp version` (single network call)
+2. Compare against installed version from `~/.local/share/voicesmith-mcp/package.json` (or the version baked into the install)
+3. If newer version exists, show notification and badge the menu bar icon
+4. Cache the check result to avoid repeated npm calls
+
+**How update works:**
+1. User clicks "Update Now"
+2. Show confirmation: "Update VoiceSmith MCP from v1.0.18 to v1.0.19? Active sessions will restart."
+3. Run `npx voicesmith-mcp install --update` in a subprocess
+4. The installer is already idempotent — it preserves config, merges new defaults, updates voice rules
+5. Show progress notification: "Updating..." → "Updated to v1.0.19. Restart your sessions."
+6. Active sessions need manual restart (or the installer could signal them via SIGTERM)
+
+**Offline:** If npm is unreachable, skip the check silently. No error shown — the menu just doesn't show an update badge.
 
 ---
 
@@ -354,6 +385,10 @@ Menu bar app is not installed. All functionality remains available via MCP tools
 11. Kill a session → disappears from list within 5 seconds
 12. Quit menu bar app → icon removed, sessions unaffected
 13. Reboot → menu bar app auto-starts via LaunchAgent
+14. Version check → shows current version in menu
+15. Newer version on npm → "Update Available" badge + menu item
+16. Click "Update Now" → runs installer, shows progress, completes
+17. Offline → no update badge, no error
 
 ---
 
