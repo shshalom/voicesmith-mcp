@@ -14,14 +14,14 @@ import numpy as np
 
 from shared import MicCaptureError, STT_SAMPLE_RATE, get_logger
 from stt.vad import VoiceActivityDetector
+from tts.media_duck import is_bluetooth_output
 
 logger = get_logger("stt.mic")
 
 _CHUNK_SAMPLES = 512        # Silero VAD requires exactly 512-sample chunks at 16kHz
 _CHUNK_BYTES   = _CHUNK_SAMPLES * 4   # float32 = 4 bytes/sample → 2048 bytes/chunk
-_ZERO_CHECK_CHUNKS = 25    # ~800ms of silence before detecting TCC denial
-                           # Must exceed CoreAudio cold-start latency (~544ms)
-                           # when a new AudioQueueRef is created per connection
+_ZERO_CHECK_CHUNKS = 25    # ~800ms — exceeds CoreAudio cold-start latency (~544ms)
+_ZERO_CHECK_CHUNKS_BT = 75 # ~2.4s — Bluetooth A2DP→HFP codec switch can take 1-2s
 
 _AUDIO_SERVICE_SOCKET  = "/tmp/voicesmith-audio.sock"
 _LAUNCHAGENT_LABEL     = "com.voicesmith-mcp.audio"
@@ -332,6 +332,8 @@ class MicCapture:
         speech_detected = False
         silence_duration = 0.0
         zero_check_done = False
+        # Bluetooth A2DP→HFP switch delivers zeros for up to ~2s
+        zero_threshold = _ZERO_CHECK_CHUNKS_BT if is_bluetooth_output() else _ZERO_CHECK_CHUNKS
         start_time = loop.time()
 
         while not self._stop_flag:
@@ -356,7 +358,7 @@ class MicCapture:
 
             chunks.append(chunk)
 
-            if not zero_check_done and len(chunks) >= _ZERO_CHECK_CHUNKS:
+            if not zero_check_done and len(chunks) >= zero_threshold:
                 zero_check_done = True
                 if all(np.max(np.abs(c)) == 0.0 for c in chunks):
                     raise MicCaptureError(self._zero_audio_message())
