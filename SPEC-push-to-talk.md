@@ -300,9 +300,8 @@ When the AI asks a question via `speak_then_listen` and the user doesn't respond
 
 | After timeout | Action |
 |---------------|--------|
-| **Speak a nudge** | The AI speaks: "I didn't catch that. Go ahead and type it." |
 | **Fall back to text** | The AI waits for typed input. Does not retry `listen`. |
-| **One nudge only** | Never repeat the nudge or re-open the mic automatically. |
+| **Optional nudge** | If `stt.nudge_on_timeout` is enabled in config, the AI speaks "I didn't catch that. Go ahead and type it." before falling back. Default: off. |
 
 For push-to-talk (user-initiated via "Hey listen"):
 | After timeout | Action |
@@ -377,7 +376,7 @@ AUDIO_LOCK_PATH = "/tmp/agent-voice-audio.lock"
 6. **Name routing:** With two sessions, say "Hey listen" → "Eric, do this" → routes to Eric's session
 7. **Audio lock:** Two sessions speak simultaneously → audio is serialized, not overlapping
 8. **Crash recovery:** `kill -9` a server → start new session → stale entry cleaned up, lock released
-9. **Timeout nudge:** AI asks question → don't respond → AI speaks "I didn't catch that" → waits for text
+9. **Timeout fallback:** AI asks question → don't respond → falls back to text (with optional nudge if `nudge_on_timeout` enabled)
 10. **Voice Control:** Say "Hey listen" → speak → text submitted to Claude Code
 11. **All existing 120 tests pass**
 

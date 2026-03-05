@@ -286,13 +286,15 @@ Convenience tool that speaks a question and immediately listens for the answer i
 }
 ```
 
-**Returns (timeout — no speech detected):** When the user doesn't respond within the timeout, the tool automatically speaks a nudge ("I didn't catch that. Go ahead and type it.") and returns:
+**Returns (timeout — no speech detected):** When the user doesn't respond within the timeout:
 ```json
 {
   "speak": { "success": true, "voice": "am_eric", "duration_ms": 1200 },
-  "listen": { "success": false, "error": "timeout", "message": "No speech detected within timeout", "nudge_spoken": true }
+  "listen": { "success": false, "error": "timeout", "message": "No speech detected within timeout" }
 }
 ```
+
+If `stt.nudge_on_timeout` is enabled in config, the tool speaks "I didn't catch that. Go ahead and type it." before returning, and includes `"nudge_spoken": true` in the listen result. Default: off.
 
 The AI should then wait for typed input — never retry `listen`.
 
@@ -468,13 +470,15 @@ AI calls listen(timeout=15)
     │
     ▼
 ┌─────────────────────────────────┐
-│  1. Play Tink ready sound        │
-├─────────────────────────────────┤
-│  2. Reset VAD state              │
+│  1. Reset VAD state              │
 │     Open mic (socket/subprocess/ │
 │     sounddevice)                 │
-│     Flush first 200ms (speaker   │
-│     bleed prevention)            │
+│     Flush ~64ms (2 chunks for    │
+│     hardware settle)             │
+├─────────────────────────────────┤
+│  2. Play Tink ready sound        │
+│     (AFTER mic is live — so user │
+│     can speak immediately)       │
 ├─────────────────────────────────┤
 │  3. Silero VAD monitors audio    │
 │     Waiting for speech...        │
@@ -583,14 +587,16 @@ The `config.json` in the project repo root is the **default template** copied du
     "voices_path": "~/.local/share/voicesmith-mcp/models/voices-v1.0.bin",
     "default_voice": "am_eric",
     "default_speed": 1.0,
-    "audio_player": "mpv"
+    "audio_player": "mpv",
+    "duck_media": true
   },
   "stt": {
     "model_size": "base",
     "language": "en",
     "silence_threshold": 1.5,
     "max_listen_timeout": 15,
-    "vad_threshold": 0.3
+    "vad_threshold": 0.3,
+    "nudge_on_timeout": false
   },
   "main_agent": "Eric",
   "last_voice_name": null,
@@ -608,6 +614,10 @@ The `http_port` configures the base port for the HTTP listener (used for push-to
 The `voice_registry` is **optional** — it starts empty by default. Voices are auto-assigned as agents speak. Users can pre-populate it to persist specific assignments across sessions, or to pin favorite voices to agent names.
 
 The `main_agent` field identifies which agent name is the primary/lead agent. This is informational — it does not restrict other agents from speaking.
+
+The `duck_media` field enables automatic media ducking during TTS playback. When `true`, the server pauses Apple Music, Spotify, and browser audio (Chrome, Brave, Edge, Safari) before speaking and resumes them after. Uses Bluetooth-aware delays (3s unduck delay for wireless audio devices). macOS only.
+
+The `nudge_on_timeout` field controls whether `speak_then_listen` speaks a verbal nudge ("I didn't catch that. Go ahead and type it.") when the user doesn't respond within the timeout. Default: `false` (silent fallback to text).
 
 ### Environment Variables
 

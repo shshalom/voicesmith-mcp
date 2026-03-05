@@ -565,6 +565,20 @@ async def speak_then_listen(
 
         listen_result = await listen(timeout=timeout, silence_threshold=silence_threshold)
 
+        # Optionally speak a nudge on timeout to prompt user to type instead
+        if (listen_result.get("error") == "timeout"
+                and _config and _config.stt.nudge_on_timeout
+                and _speech_queue):
+            nudge_text = "I didn't catch that. Go ahead and type it."
+            voice, _ = _registry.get_voice(name) if _registry else (None, False)
+            if voice and _tts_engine:
+                try:
+                    result = _tts_engine.synthesize(nudge_text, voice, speed)
+                    _audio_player.play(result.samples, result.sample_rate)
+                    listen_result["nudge_spoken"] = True
+                except Exception:
+                    pass
+
         return {"speak": speak_result, "listen": listen_result}
     finally:
         _suppress_duck = False

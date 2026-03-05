@@ -2,6 +2,15 @@
 
 All notable changes to VoiceSmith MCP are documented here.
 
+## [1.0.18] - 2026-03-05
+
+### Added
+- **`stt.nudge_on_timeout` config:** Configurable spoken nudge when `speak_then_listen` times out. Default: off. When enabled, speaks "I didn't catch that. Go ahead and type it." before falling back to text.
+
+### Changed
+- **SPEC.md:** Updated `speak_then_listen` timeout docs, config.json template (added `duck_media`, `nudge_on_timeout`), media ducking description, mic flush timing (200ms → 64ms), ready sound plays after mic is live
+- **SPEC-push-to-talk.md:** Updated nudge references to reflect configurable toggle
+
 ## [1.0.17] - 2026-03-05
 
 ### Fixed

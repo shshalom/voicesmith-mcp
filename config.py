@@ -37,6 +37,7 @@ class STTConfig:
     silence_threshold: float = 1.5
     max_listen_timeout: float = 15
     vad_threshold: float = 0.3
+    nudge_on_timeout: bool = False
 
 
 @dataclass
@@ -117,6 +118,8 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
                     config.stt.max_listen_timeout = float(stt["max_listen_timeout"])
                 if "vad_threshold" in stt:
                     config.stt.vad_threshold = float(stt["vad_threshold"])
+                if "nudge_on_timeout" in stt:
+                    config.stt.nudge_on_timeout = bool(stt["nudge_on_timeout"])
 
             # Top-level config
             if "main_agent" in data:
@@ -191,6 +194,7 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
             "silence_threshold": config.stt.silence_threshold,
             "max_listen_timeout": config.stt.max_listen_timeout,
             "vad_threshold": config.stt.vad_threshold,
+            "nudge_on_timeout": config.stt.nudge_on_timeout,
         },
         "main_agent": config.main_agent,
         "last_voice_name": config.last_voice_name,

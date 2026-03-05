@@ -39,7 +39,7 @@ What the AI does automatically:
 
 | Moment | What happens |
 |--------|-------------|
-| You give it a task | Speaks a brief acknowledgment |
+| You give it a task | Gets to work (speaks only when clarifying approach) |
 | It finishes work | Speaks a summary of what was done |
 | It has a question | Asks out loud, then listens for your voice response |
 | Voice tools unavailable | Falls back to text silently |
@@ -112,7 +112,8 @@ The MCP server runs as a local process alongside your IDE. It communicates over 
 - **TTS**: Kokoro ONNX — fast neural TTS, 54 voices, no GPU needed
 - **STT**: faster-whisper — OpenAI Whisper running locally via CTranslate2
 - **VAD**: Silero VAD — voice activity detection for clean recordings
-- **Audio**: mpv for playback, sounddevice for recording
+- **Audio**: mpv for playback; CoreAudio via native app bundle on macOS (sounddevice fallback on Linux)
+- **Media ducking**: Auto-pauses Apple Music, Spotify, and browser audio during speech (macOS)
 
 ## Multi-Session
 
@@ -131,15 +132,23 @@ Config lives at `~/.local/share/voicesmith-mcp/config.json`. Key settings:
   "main_agent": "Eric",
   "tts": {
     "default_voice": "am_eric",
-    "audio_player": "mpv"
+    "audio_player": "mpv",
+    "duck_media": true
   },
   "stt": {
     "model_size": "base",
     "language": "en",
-    "vad_threshold": 0.3
+    "vad_threshold": 0.3,
+    "nudge_on_timeout": false
   }
 }
 ```
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `tts.duck_media` | Auto-pause music/browser audio during speech (macOS) | `true` |
+| `stt.nudge_on_timeout` | Speak "I didn't catch that" when listen times out | `false` |
+| `stt.vad_threshold` | Voice detection sensitivity (lower = more sensitive) | `0.3` |
 
 Re-run `npx voicesmith-mcp install` to change your voice or update settings. Existing configuration is preserved — only new defaults are added.
 
@@ -166,16 +175,14 @@ Re-run `npx voicesmith-mcp install` to change your voice or update settings. Exi
 
 ### The AI can't hear me (listen returns empty or times out)
 
-**Check microphone permissions.** On macOS, the terminal app that runs your IDE needs microphone access:
+**Check microphone permissions.** On macOS, VoiceSmith uses a native app bundle (`VoiceSmithMCP.app`) for mic access. The first time it records, macOS should show a permission dialog for the app. If it didn't:
 
 1. Open **System Settings > Privacy & Security > Microphone**
-2. Make sure your terminal app is listed and enabled:
-   - **Warp**, **Terminal.app**, or **iTerm2** — for Claude Code
-   - **Cursor** or **VS Code** — if using those IDEs directly
-3. If the app isn't listed, the first `listen` call should trigger the permission prompt. Approve it and try again.
+2. Look for **VoiceSmithMCP** and make sure it's enabled
+3. If it's not listed, the LaunchAgent may not be running — try reinstalling: `npx voicesmith-mcp install`
 
 > [!IMPORTANT]
-> The Python process inherits microphone permissions from the app that launched it. If your terminal doesn't have mic access, listen will silently fail.
+> If the server detects silent audio (all zeros for ~320ms), it returns an error pointing you to the microphone permission settings. This usually means macOS TCC denied mic access.
 
 **Check your audio input device.** If an external mic is selected but not connected, the server opens it but gets silence:
 - Open **System Settings > Sound > Input** and verify the correct mic is selected
