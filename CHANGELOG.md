@@ -2,6 +2,17 @@
 
 All notable changes to VoiceSmith MCP are documented here.
 
+## [1.0.17] - 2026-03-05
+
+### Fixed
+- **Mic capture:** Fix losing first seconds of speech — improved stream startup and buffer handling
+- **TTS:** Pad tail silence to prevent audio clipping at end of speech
+- **Listen timeout:** Remove spoken nudge on timeout — fall back to text silently
+
+### Added
+- **Media ducking:** Auto-lower system media volume during TTS playback, with Bluetooth-aware delays
+- **`tts/media_duck.py`:** New module for macOS media ducking via AppleScript
+
 ## [1.0.14] - 2026-02-28
 
 ### Changed
