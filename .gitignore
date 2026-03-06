@@ -24,5 +24,8 @@ models/
 # Pytest
 .pytest_cache/
 
+# Compiled binaries
+menubar/voicesmith-menu
+
 # Logs
 *.log
