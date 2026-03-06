@@ -18,7 +18,7 @@ import subprocess
 import sys
 import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -181,46 +181,81 @@ def _init_wake(config: AppConfig):
 # ─── HTTP Listener (Push-to-Talk) ─────────────────────────────────────────────
 
 class _VoiceHTTPHandler(BaseHTTPRequestHandler):
-    """HTTP handler for push-to-talk. Runs in a daemon thread."""
+    """HTTP handler for push-to-talk and menu bar app. Runs in a daemon thread."""
 
     def do_GET(self):
         if self.path == "/status":
-            body = json.dumps({
-                "ready": True,
-                "name": _session_info.get("name") if _session_info else None,
-                "port": _session_info.get("port") if _session_info else None,
-                "session_id": _session_info.get("session_id") if _session_info else None,
-                "mcp_connected": _event_loop is not None,
-                "uptime_s": round(time.time() - _startup_time),
-                "last_tool_call_age_s": round(time.time() - _last_tool_call),
-            })
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body.encode())
+            self._handle_status()
         else:
             self.send_error(404)
 
     def do_POST(self):
-        if self.path == "/listen":
-            self._handle_listen()
-        elif self.path == "/speak":
-            self._handle_speak()
-        elif self.path == "/session":
-            self._handle_session_update()
+        handlers = {
+            "/listen": self._handle_listen,
+            "/speak": self._handle_speak,
+            "/session": self._handle_session_update,
+            "/config": self._handle_config,
+            "/set_voice": self._handle_set_voice,
+            "/stop": self._handle_stop,
+            "/mute": self._handle_mute,
+            "/unmute": self._handle_unmute,
+            "/wake_enable": self._handle_wake_enable,
+            "/wake_disable": self._handle_wake_disable,
+        }
+        handler = handlers.get(self.path)
+        if handler:
+            handler()
         else:
             self.send_error(404)
+
+    def _handle_status(self):
+        """Extended status matching MCP status tool — used by menu bar app."""
+        data = {
+            "ready": True,
+            "name": _session_info.get("name") if _session_info else None,
+            "voice": _session_info.get("voice") if _session_info else None,
+            "port": _session_info.get("port") if _session_info else None,
+            "pid": _session_info.get("pid") if _session_info else None,
+            "session_id": _session_info.get("session_id") if _session_info else None,
+            "tmux_session": _session_info.get("tmux_session") if _session_info else None,
+            "started_at": _session_info.get("started_at") if _session_info else None,
+            "mcp_connected": _event_loop is not None,
+            "uptime_s": round(time.time() - _startup_time),
+            "last_tool_call_age_s": round(time.time() - _last_tool_call),
+            "muted": _muted,
+            "listening": _listen_active,
+            "tts": {
+                "loaded": _tts_engine is not None and _tts_engine.is_loaded(),
+                "model": "kokoro-v1.0.onnx" if _tts_engine else None,
+                "voices": len(ALL_VOICE_IDS) if _tts_engine else 0,
+                "duck_media": _config.tts.duck_media if _config else False,
+            },
+            "stt": {
+                "loaded": _stt_engine is not None and _stt_engine.is_loaded(),
+                "model": f"whisper-{_config.stt.model_size}" if _stt_engine and _config else None,
+                "language": _config.stt.language if _config else None,
+                "nudge_on_timeout": _config.stt.nudge_on_timeout if _config else False,
+            },
+            "vad": {
+                "loaded": _vad is not None and _vad.is_loaded(),
+            },
+            "wake_word": {
+                "enabled": _config.wake_word.enabled if _config else False,
+                "listening": _wake_listener.is_listening if _wake_listener else False,
+                "state": _wake_listener.state if _wake_listener else "disabled",
+                "model": _config.wake_word.model if _config else None,
+            },
+            "queue_depth": _speech_queue.depth if _speech_queue else 0,
+            "registry_size": _registry.size if _registry else 0,
+        }
+        self._json_response(200, data)
 
     def _handle_session_update(self):
         """Receive session_id from the SessionStart hook and reconcile voice."""
         global _session_info
 
-        try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length) if content_length > 0 else b"{}"
-            params = json.loads(body)
-        except (json.JSONDecodeError, ValueError):
-            self._json_response(400, {"error": "invalid_json"})
+        params = self._read_json_body()
+        if params is None:
             return
 
         session_id = params.get("session_id")
@@ -239,30 +274,27 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(404, {"error": "session_not_found"})
 
     def _handle_speak(self):
-        """Synthesize and play speech via HTTP. Used by SessionStart hook for preheat intro."""
+        """Synthesize and play speech via HTTP."""
         if _event_loop is None:
             self._json_response(500, {"error": "server_not_ready"})
             return
 
-        try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length) if content_length > 0 else b"{}"
-            params = json.loads(body)
-        except (json.JSONDecodeError, ValueError):
-            self._json_response(400, {"error": "invalid_json"})
+        params = self._read_json_body()
+        if params is None:
             return
 
         default_name = _config.main_agent if _config else "Eric"
         name = params.get("name", _session_info.get("name", default_name) if _session_info else default_name)
         text = params.get("text", "")
         speed = params.get("speed", 1.0)
+        block = params.get("block", True)
 
         if not text:
             self._json_response(400, {"error": "missing_text"})
             return
 
         future = asyncio.run_coroutine_threadsafe(
-            speak(name, text, speed, block=True),
+            speak(name, text, speed, block=block),
             _event_loop,
         )
         try:
@@ -272,21 +304,159 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(500, {"error": "speak_failed", "message": str(e)})
 
     def _handle_listen(self):
-        """Record mic → transcribe → return JSON. Bridges to async via the main event loop."""
+        """Record mic → transcribe → return JSON."""
         if _event_loop is None:
             self._json_response(500, {"error": "server_not_ready"})
             return
 
-        # Schedule the listen coroutine on the main event loop
         future = asyncio.run_coroutine_threadsafe(
             listen(timeout=15, prompt="push-to-talk", silence_threshold=1.5),
             _event_loop,
         )
         try:
-            result = future.result(timeout=30)  # Wait up to 30s
+            result = future.result(timeout=30)
             self._json_response(200, result)
         except Exception as e:
             self._json_response(500, {"error": "listen_failed", "message": str(e)})
+
+    def _handle_config(self):
+        """Update a config value. Single writer for config.json — prevents race conditions."""
+        params = self._read_json_body()
+        if params is None:
+            return
+
+        key = params.get("key")
+        value = params.get("value")
+        if not key:
+            self._json_response(400, {"error": "missing_key"})
+            return
+
+        if _config is None:
+            self._json_response(500, {"error": "config_not_loaded"})
+            return
+
+        # Navigate dotted key path (e.g., "tts.duck_media")
+        parts = key.split(".")
+        obj = _config
+        for part in parts[:-1]:
+            obj = getattr(obj, part, None)
+            if obj is None:
+                self._json_response(400, {"error": f"invalid_config_key: {key}"})
+                return
+
+        field = parts[-1]
+        if not hasattr(obj, field):
+            self._json_response(400, {"error": f"invalid_config_key: {key}"})
+            return
+
+        setattr(obj, field, value)
+
+        try:
+            save_config(_config)
+        except Exception as e:
+            self._json_response(500, {"error": "save_failed", "message": str(e)})
+            return
+
+        # Apply side effects
+        if key == "wake_word.enabled" and _event_loop:
+            tool = wake_enable if value else wake_disable
+            try:
+                future = asyncio.run_coroutine_threadsafe(tool(), _event_loop)
+                future.result(timeout=10)
+            except Exception:
+                pass
+
+        logger.info(f"Config updated via HTTP: {key} = {value}")
+        self._json_response(200, {"success": True, "key": key, "value": value})
+
+    def _handle_set_voice(self):
+        """Change session voice. Bridges to async set_voice MCP tool."""
+        if _event_loop is None:
+            self._json_response(500, {"error": "server_not_ready"})
+            return
+
+        params = self._read_json_body()
+        if params is None:
+            return
+
+        voice = params.get("voice")
+        if not voice:
+            self._json_response(400, {"error": "missing_voice"})
+            return
+
+        name = _session_info.get("name", "Agent") if _session_info else "Agent"
+        future = asyncio.run_coroutine_threadsafe(
+            set_voice(name, voice),
+            _event_loop,
+        )
+        try:
+            result = future.result(timeout=10)
+            self._json_response(200, result)
+        except Exception as e:
+            self._json_response(500, {"error": "set_voice_failed", "message": str(e)})
+
+    def _handle_stop(self):
+        """Stop playback and cancel active listen."""
+        if _event_loop is None:
+            self._json_response(500, {"error": "server_not_ready"})
+            return
+
+        future = asyncio.run_coroutine_threadsafe(stop(), _event_loop)
+        try:
+            result = future.result(timeout=10)
+            self._json_response(200, result)
+        except Exception as e:
+            self._json_response(500, {"error": "stop_failed", "message": str(e)})
+
+    def _handle_mute(self):
+        """Mute voice output."""
+        global _muted
+        _muted = True
+        logger.info("Muted via HTTP")
+        self._json_response(200, {"success": True, "muted": True})
+
+    def _handle_unmute(self):
+        """Unmute voice output."""
+        global _muted
+        _muted = False
+        logger.info("Unmuted via HTTP")
+        self._json_response(200, {"success": True, "muted": False})
+
+    def _handle_wake_enable(self):
+        """Enable wake word listener."""
+        if _event_loop is None:
+            self._json_response(500, {"error": "server_not_ready"})
+            return
+
+        future = asyncio.run_coroutine_threadsafe(wake_enable(), _event_loop)
+        try:
+            result = future.result(timeout=10)
+            self._json_response(200, result)
+        except Exception as e:
+            self._json_response(500, {"error": "wake_enable_failed", "message": str(e)})
+
+    def _handle_wake_disable(self):
+        """Disable wake word listener."""
+        if _event_loop is None:
+            self._json_response(500, {"error": "server_not_ready"})
+            return
+
+        future = asyncio.run_coroutine_threadsafe(wake_disable(), _event_loop)
+        try:
+            result = future.result(timeout=10)
+            self._json_response(200, result)
+        except Exception as e:
+            self._json_response(500, {"error": "wake_disable_failed", "message": str(e)})
+
+    def _read_json_body(self):
+        """Read and parse JSON body. Returns dict or None (sends error response on failure)."""
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+            return json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self._json_response(400, {"error": "invalid_json"})
+            return None
 
     def _json_response(self, code, data):
         body = json.dumps(data)
@@ -303,7 +473,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
 def _start_http_listener(port: int):
     """Start the HTTP listener in a daemon thread."""
     try:
-        server = HTTPServer(("127.0.0.1", port), _VoiceHTTPHandler)
+        server = ThreadingHTTPServer(("127.0.0.1", port), _VoiceHTTPHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         logger.info(f"HTTP listener started on 127.0.0.1:{port}")
@@ -1000,6 +1170,9 @@ def _start_periodic_save_thread():
                 get_active_sessions()
             except Exception as e:
                 logger.error(f"Periodic session cleanup failed: {e}")
+
+    threading.Thread(target=_save_loop, daemon=True).start()
+    logger.debug("Periodic save thread started")
 
 
 if __name__ == "__main__":

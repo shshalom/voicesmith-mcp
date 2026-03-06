@@ -61,6 +61,7 @@ class AppConfig:
     log_level: str = "info"
     log_file: bool = False
     http_port: int = 7865
+    check_updates: bool = True
 
 
 def get_config_path() -> Path:
@@ -134,6 +135,8 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
                 config.log_file = bool(data["log_file"])
             if "http_port" in data:
                 config.http_port = int(data["http_port"])
+            if "check_updates" in data:
+                config.check_updates = bool(data["check_updates"])
 
             # Wake word config
             if "wake_word" in data:
@@ -202,6 +205,7 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
         "log_level": config.log_level,
         "log_file": config.log_file,
         "http_port": config.http_port,
+        "check_updates": config.check_updates,
         "wake_word": {
             "enabled": config.wake_word.enabled,
             "model": config.wake_word.model,

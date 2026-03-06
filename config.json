@@ -20,6 +20,7 @@
   "log_level": "info",
   "log_file": false,
   "http_port": 7865,
+  "check_updates": true,
   "wake_word": {
     "enabled": false,
     "model": "hey_listen",
