@@ -203,6 +203,12 @@ class AppState: ObservableObject {
     @Published var downloadStatus = ""
     private var downloadProcess: Process?
 
+    // Wake word state
+    @Published var wakeEnabled = false
+    @Published var wakeState = "disabled"  // disabled, listening, recording, transcribing, yielded
+    private var wakeProcess: Process?
+    private var wakeOutputPipe: Pipe?
+
     /// Rolling activity history per port — last 30 data points (~5 min at 10s intervals)
     @Published var activityHistory: [Int: [ActivityPoint]] = [:]
 
@@ -224,6 +230,13 @@ class AppState: ObservableObject {
         guard !pollingStarted else { return }
         pollingStarted = true
         installedVersion = readInstalledVersion()
+
+        // Auto-start wake detector if enabled in config
+        readConfigFallback()
+        if wakeEnabled && wakeProcess == nil {
+            startWakeDetector()
+        }
+
         poll()
         // Adaptive polling: 1s when any session is active, 5s when idle
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -332,6 +345,11 @@ class AppState: ObservableObject {
             nudgeOnTimeout = stt["nudge_on_timeout"] as? Bool ?? false
             configuredModelSize = stt["model_size"] as? String ?? "base"
             if currentModelSize.isEmpty { currentModelSize = configuredModelSize }
+        }
+        if let ww = cfg["wake_word"] as? [String: Any] {
+            let enabled = ww["enabled"] as? Bool ?? false
+            wakeEnabled = enabled
+            // Auto-start is handled by startPolling(), not here
         }
     }
 
@@ -563,6 +581,146 @@ class AppState: ObservableObject {
     }
 
     func openConfig() { NSWorkspace.shared.open(configFile) }
+
+    // MARK: - Wake Word
+
+    func toggleWake() {
+        if wakeEnabled {
+            stopWakeDetector()
+        } else {
+            startWakeDetector()
+        }
+        // Persist to config
+        let path = configFile.path(percentEncoded: false)
+        if FileManager.default.fileExists(atPath: path),
+           let data = try? Data(contentsOf: configFile),
+           var cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            var ww = cfg["wake_word"] as? [String: Any] ?? [:]
+            ww["enabled"] = !wakeEnabled  // will be toggled below
+            cfg["wake_word"] = ww
+            if let jsonData = try? JSONSerialization.data(withJSONObject: cfg, options: .prettyPrinted) {
+                try? jsonData.write(to: configFile)
+            }
+        }
+        wakeEnabled.toggle()
+    }
+
+    func startWakeDetector() {
+        // Kill any existing detector first (prevents duplicates)
+        stopWakeDetector()
+        guard wakeProcess == nil else { return }
+
+        let pythonPath = dataDir.appendingPathComponent(".venv/bin/python3").path(percentEncoded: false)
+        let scriptPath = dataDir.appendingPathComponent("wake_detector.py").path(percentEncoded: false)
+
+        // Fall back to project source if not installed
+        let finalScript: String
+        if FileManager.default.fileExists(atPath: scriptPath) {
+            finalScript = scriptPath
+        } else {
+            let projectScript = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("wake_detector.py").path
+            finalScript = projectScript
+        }
+
+        guard FileManager.default.fileExists(atPath: pythonPath) else {
+            wakeState = "disabled"
+            return
+        }
+
+        let pipe = Pipe()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: pythonPath)
+        process.arguments = [finalScript]
+        process.standardOutput = pipe
+        // Log stderr for debugging
+        let errLog = FileHandle(forWritingAtPath: "/tmp/voicesmith-wake-err.log")
+            ?? FileHandle(forUpdatingAtPath: "/tmp/voicesmith-wake-err.log")
+            ?? { let _ = FileManager.default.createFile(atPath: "/tmp/voicesmith-wake-err.log", contents: nil)
+                 return FileHandle(forWritingAtPath: "/tmp/voicesmith-wake-err.log")! }()
+        errLog.seekToEndOfFile()
+        process.standardError = errLog
+
+        wakeOutputPipe = pipe
+        wakeProcess = process
+
+        // Read stdout events in a background thread, respawn if it dies
+        let fileHandle = pipe.fileHandleForReading
+        Thread.detachNewThread { [weak self] in
+            while let line = self?.readLine(from: fileHandle) {
+                DispatchQueue.main.async {
+                    self?.handleWakeEvent(line)
+                }
+            }
+            // Process died — respawn if still enabled
+            DispatchQueue.main.async {
+                self?.wakeProcess = nil
+                self?.wakeOutputPipe = nil
+                if self?.wakeEnabled == true {
+                    self?.wakeState = "listening"
+                    // Respawn after a short delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        if self?.wakeEnabled == true && self?.wakeProcess == nil {
+                            self?.startWakeDetector()
+                        }
+                    }
+                } else {
+                    self?.wakeState = "disabled"
+                }
+            }
+        }
+
+        do {
+            try process.run()
+            wakeState = "listening"
+        } catch {
+            wakeState = "disabled"
+            wakeProcess = nil
+        }
+    }
+
+    func stopWakeDetector() {
+        wakeProcess?.terminate()
+        wakeProcess = nil
+        wakeOutputPipe = nil
+        wakeState = "disabled"
+        // Also kill any stray detector processes
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        task.arguments = ["-f", "wake_detector.py"]
+        try? task.run()
+        task.waitUntilExit()
+    }
+
+    private nonisolated func readLine(from handle: FileHandle) -> String? {
+        var buffer = Data()
+        while true {
+            let byte = handle.readData(ofLength: 1)
+            if byte.isEmpty { return nil }  // EOF
+            if byte[0] == UInt8(ascii: "\n") {
+                return String(data: buffer, encoding: .utf8)
+            }
+            buffer.append(byte)
+        }
+    }
+
+    private func handleWakeEvent(_ line: String) {
+        let parts = line.split(separator: " ", maxSplits: 1)
+        let event = String(parts.first ?? "")
+
+        switch event {
+        case "LISTENING": wakeState = "listening"
+        case "WAKE": wakeState = "recording"
+        case "RECORDING": wakeState = "recording"
+        case "TRANSCRIBING": wakeState = "transcribing"
+        case "INJECTED": wakeState = "listening"
+        case "YIELDED": wakeState = "yielded"
+        case "RESUMED": wakeState = "listening"
+        case "ERROR": break  // could show notification
+        default: break
+        }
+    }
 }
 
 // MARK: - Activity Sparkline
@@ -983,6 +1141,7 @@ struct MenuPanel: View {
                 // Toggles
                 toggleRow("Media Ducking", icon: "music.note", isOn: state.duckMedia, action: state.toggleDuck)
                 toggleRow("Nudge on Timeout", icon: "bubble.left", isOn: state.nudgeOnTimeout, action: state.toggleNudge)
+                toggleRow("Wake Word", icon: "ear", isOn: state.wakeEnabled, action: state.toggleWake)
 
                 Divider().padding(.vertical, 4)
 
@@ -1099,6 +1258,23 @@ struct MenuPanel: View {
 
 // MARK: - App
 
+/// Ensure only one instance of VoiceSmith menu bar is running
+func ensureSingleInstance() {
+    let myPID = ProcessInfo.processInfo.processIdentifier
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    task.arguments = ["-f", "VoiceSmith.app/Contents/MacOS/VoiceSmith"]
+    let pipe = Pipe()
+    task.standardOutput = pipe
+    try? task.run()
+    task.waitUntilExit()
+    let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    let pids = output.split(separator: "\n").compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+    for pid in pids where pid != myPID {
+        kill(pid, SIGTERM)
+    }
+}
+
 /// Set the app icon (shown in Activity Monitor, Dock, etc.) from bundled PNG
 func setAppIcon() {
     let binaryURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
@@ -1146,14 +1322,15 @@ struct VoiceSmithMenuApp: App {
     }
 
     init() {
+        ensureSingleInstance()
         setAppIcon()
     }
 }
 
 /// Compose an NSImage with the mic SF Symbol and status indicator
-func makeMenuBarIcon(sessions: [VoiceSession], isMuted: Bool, statusCache: [Int: SessionStatus]) -> NSImage {
-    // Check if any session is actively listening (mic open)
-    let anyListening = sessions.contains { s in
+func makeMenuBarIcon(sessions: [VoiceSession], isMuted: Bool, statusCache: [Int: SessionStatus], wakeState: String = "disabled") -> NSImage {
+    // Check if any session is actively listening (mic open) or wake is recording
+    let anyListening = wakeState == "recording" || wakeState == "transcribing" || sessions.contains { s in
         statusCache[s.port]?.listening == true
     }
 
@@ -1183,25 +1360,32 @@ func makeMenuBarIcon(sessions: [VoiceSession], isMuted: Bool, statusCache: [Int:
     )
     let iconOrigin = NSPoint(x: padding, y: padding)
 
-    // Active/listening mode: orange capsule background with white mic
+    // Active/listening mode: wide orange pill (matches macOS native mic indicator)
     if anyListening && !isMuted {
-        let composited = NSImage(size: canvasSize, flipped: false) { rect in
-            // Orange capsule — inset slightly so it's centered in the canvas
-            let capsuleRect = rect.insetBy(dx: 1, dy: 1)
-            let bgPath = NSBezierPath(roundedRect: capsuleRect, xRadius: capsuleRect.height / 2, yRadius: capsuleRect.height / 2)
+        let pillHeight: CGFloat = 24
+        let pillWidth: CGFloat = 38
+        let pillSize = NSSize(width: pillWidth, height: pillHeight)
+
+        let iconConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        let micIcon = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)!
+            .withSymbolConfiguration(iconConfig)!
+
+        let composited = NSImage(size: pillSize, flipped: false) { rect in
+            // Orange pill background
+            let bgPath = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
             NSColor.systemOrange.setFill()
             bgPath.fill()
 
-            // White mic icon centered
-            let tintedIcon = NSImage(size: baseIcon.size, flipped: false) { iconRect in
-                baseIcon.draw(in: iconRect)
+            // White mic centered
+            let tinted = NSImage(size: micIcon.size, flipped: false) { r in
+                micIcon.draw(in: r)
                 NSColor.white.set()
-                iconRect.fill(using: .sourceAtop)
+                r.fill(using: .sourceAtop)
                 return true
             }
-            tintedIcon.draw(at: NSPoint(x: (rect.width - baseIcon.size.width) / 2,
-                                         y: (rect.height - baseIcon.size.height) / 2),
-                           from: .zero, operation: .sourceOver, fraction: 1.0)
+            tinted.draw(at: NSPoint(x: (rect.width - micIcon.size.width) / 2,
+                                     y: (rect.height - micIcon.size.height) / 2),
+                       from: .zero, operation: .sourceOver, fraction: 1.0)
             return true
         }
         composited.isTemplate = false
@@ -1258,7 +1442,8 @@ struct MenuBarIcon: View {
         Image(nsImage: makeMenuBarIcon(
             sessions: state.sessions,
             isMuted: state.isMuted,
-            statusCache: state.statusCache
+            statusCache: state.statusCache,
+            wakeState: state.wakeState
         ))
     }
 }

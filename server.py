@@ -201,6 +201,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "/unmute": self._handle_unmute,
             "/wake_enable": self._handle_wake_enable,
             "/wake_disable": self._handle_wake_disable,
+            "/transcribe": self._handle_transcribe,
         }
         handler = handlers.get(self.path)
         if handler:
@@ -448,6 +449,38 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json_response(500, {"error": "wake_disable_failed", "message": str(e)})
 
+    def _handle_transcribe(self):
+        """Transcribe pre-recorded audio without opening the mic."""
+        if _event_loop is None:
+            self._json_response(500, {"error": "server_not_ready"})
+            return
+
+        if _stt_engine is None:
+            self._json_response(500, {"error": "stt_unavailable"})
+            return
+
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            if content_length == 0:
+                self._json_response(400, {"error": "missing_audio_data"})
+                return
+            import numpy as np
+            audio_bytes = self.rfile.read(content_length)
+            audio = np.frombuffer(audio_bytes, dtype=np.float32).copy()
+        except Exception as e:
+            self._json_response(400, {"error": "invalid_audio", "message": str(e)})
+            return
+
+        future = asyncio.run_coroutine_threadsafe(
+            _transcribe_audio(audio),
+            _event_loop,
+        )
+        try:
+            result = future.result(timeout=30)
+            self._json_response(200, result)
+        except Exception as e:
+            self._json_response(500, {"error": "transcription_failed", "message": str(e)})
+
     def _read_json_body(self):
         """Read and parse JSON body. Returns dict or None (sends error response on failure)."""
         try:
@@ -605,6 +638,28 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
         _wake_listener.reclaim_mic()
 
     return response
+
+
+@mcp.tool()
+async def _transcribe_audio(audio) -> dict:
+    """Transcribe provided audio data using faster-whisper (no mic)."""
+    try:
+        loop = asyncio.get_running_loop()
+        start = time.perf_counter()
+        result = await loop.run_in_executor(
+            None, _stt_engine.transcribe, audio, STT_SAMPLE_RATE
+        )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        return {
+            "success": True,
+            "text": result.text,
+            "confidence": round(result.confidence, 3),
+            "duration_ms": round(elapsed_ms, 1),
+            "transcription_ms": round(result.transcription_ms, 1),
+        }
+    except Exception as e:
+        logger.error(f"Audio transcription failed: {e}")
+        return {"success": False, "error": "transcription_failed", "message": str(e)}
 
 
 @mcp.tool()
