@@ -1,6 +1,7 @@
 #!/bin/bash
 # VoiceSmith MCP — Shell installer (alternative to npx)
 # Usage: ./install.sh [--claude] [--cursor] [--codex] [--all]
+#        ./install.sh --uninstall
 set -e
 
 BOLD="\033[1m"
@@ -27,14 +28,121 @@ info()   { echo -e "  ${DIM}ℹ${RESET} $1"; }
 # ─── Parse flags ────────────────────────────────────────────────────────
 TARGET_IDES=()
 
+UNINSTALL=false
+
 for arg in "$@"; do
     case "$arg" in
         --claude) TARGET_IDES+=("claude") ;;
         --cursor) TARGET_IDES+=("cursor") ;;
         --codex)  TARGET_IDES+=("codex") ;;
         --all)    TARGET_IDES=("claude" "cursor" "codex") ;;
+        --uninstall) UNINSTALL=true ;;
     esac
 done
+
+# ─── Uninstall ─────────────────────────────────────────────────────────
+if $UNINSTALL; then
+    echo -e "\n${BOLD}🎙️  VoiceSmith MCP — Uninstall${RESET}\n"
+    echo -n "  Remove VoiceSmith MCP and all data? (yes/no): "
+    read -r answer
+    if [ "$answer" != "yes" ] && [ "$answer" != "y" ]; then
+        echo "  Cancelled."
+        exit 0
+    fi
+    echo ""
+
+    # Unload LaunchAgents
+    for plist in "$HOME/Library/LaunchAgents/com.voicesmith-mcp.audio.plist" \
+                 "$HOME/Library/LaunchAgents/com.voicesmith-mcp.menubar.plist"; do
+        if [ -f "$plist" ]; then
+            launchctl unload "$plist" 2>/dev/null || true
+            rm -f "$plist"
+            ok "Removed $(basename "$plist")"
+        fi
+    done
+
+    # Kill running processes
+    pkill -f "VoiceSmith.app" 2>/dev/null || true
+    pkill -f "VoiceSmithMCP.app" 2>/dev/null || true
+    pkill -f "wake_detector" 2>/dev/null || true
+
+    # Remove install directory
+    if [ -d "$INSTALL_DIR" ]; then
+        rm -rf "$INSTALL_DIR"
+        ok "Removed $INSTALL_DIR"
+    fi
+
+    # Remove MCP config entries
+    for config in "$HOME/.claude.json" "$HOME/.cursor/mcp.json" "$HOME/.codex/mcp.json"; do
+        if [ -f "$config" ]; then
+            python3 -c "
+import json, sys
+try:
+    with open('$config') as f:
+        data = json.load(f)
+    servers = data.get('mcpServers', {})
+    if 'voicesmith' in servers:
+        del servers['voicesmith']
+        with open('$config', 'w') as f:
+            json.dump(data, f, indent=2)
+        print('removed')
+except:
+    pass
+" 2>/dev/null && ok "Removed MCP entry from $(basename "$config")" || true
+        fi
+    done
+
+    # Remove voice rules from IDE configs
+    for rulefile in "$HOME/.claude/CLAUDE.md" "$HOME/.cursor/rules/voicesmith.mdc" "$HOME/.codex/AGENTS.md"; do
+        if [ -f "$rulefile" ] && grep -q "$SENTINEL" "$rulefile" 2>/dev/null; then
+            python3 -c "
+sentinel = '$SENTINEL'
+with open('$rulefile') as f:
+    content = f.read()
+idx = content.find(sentinel)
+if idx >= 0:
+    before = content[:idx].rstrip()
+    with open('$rulefile', 'w') as f:
+        f.write(before + '\n')
+    print('removed')
+" 2>/dev/null && ok "Removed voice rules from $(basename "$rulefile")" || true
+        fi
+    done
+
+    # Remove shell init source line
+    for profile in "$HOME/.zshrc" "$HOME/.bashrc"; do
+        if [ -f "$profile" ] && grep -q "voicesmith-mcp" "$profile" 2>/dev/null; then
+            sed -i '' '/# voicesmith-mcp/d' "$profile"
+            sed -i '' '/voicesmith-mcp\/shell-init.sh/d' "$profile"
+            ok "Removed source line from $(basename "$profile")"
+        fi
+    done
+
+    # Remove Claude Code hooks
+    SETTINGS="$HOME/.claude/settings.json"
+    if [ -f "$SETTINGS" ]; then
+        python3 -c "
+import json
+with open('$SETTINGS') as f:
+    data = json.load(f)
+hooks = data.get('hooks', {})
+for event in list(hooks.keys()):
+    hooks[event] = [h for h in hooks[event]
+                    if not any('voicesmith-mcp' in str(hook.get('command',''))
+                              for hook in h.get('hooks', []))]
+    if not hooks[event]:
+        del hooks[event]
+if not hooks:
+    data.pop('hooks', None)
+with open('$SETTINGS', 'w') as f:
+    json.dump(data, f, indent=2)
+print('removed')
+" 2>/dev/null && ok "Removed Claude Code hooks" || true
+    fi
+
+    echo -e "\n🎉 ${BOLD}Uninstalled.${RESET}\n"
+    exit 0
+fi
 
 echo -e "\n${BOLD}🎙️  VoiceSmith MCP — Local AI Voice System${RESET}\n"
 
