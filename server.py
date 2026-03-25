@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import platform
+import queue as queue_mod
 import signal
 import subprocess
 import sys
@@ -77,6 +78,7 @@ _muted = False
 _listen_cancel_event: asyncio.Event = None
 _listen_active = False
 _suppress_duck = False  # Set by speak_then_listen to prevent inner duck/unduck gaps
+_wake_queue = queue_mod.Queue(maxsize=1)  # Wake word message queue (menu bar → listen)
 _startup_time = time.time()
 _last_tool_call = time.time()  # Updated on every MCP tool call
 _session_info: dict = None
@@ -202,6 +204,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "/wake_enable": self._handle_wake_enable,
             "/wake_disable": self._handle_wake_disable,
             "/transcribe": self._handle_transcribe,
+            "/wake_message": self._handle_wake_message,
         }
         handler = handlers.get(self.path)
         if handler:
@@ -481,6 +484,30 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json_response(500, {"error": "transcription_failed", "message": str(e)})
 
+    def _handle_wake_message(self):
+        """Receive a wake word message from the menu bar app."""
+        params = self._read_json_body()
+        if params is None:
+            return
+
+        text = params.get("text", "")
+        if not text:
+            self._json_response(400, {"error": "missing_text"})
+            return
+
+        # Clear old message, put new one
+        while not _wake_queue.empty():
+            try:
+                _wake_queue.get_nowait()
+            except queue_mod.Empty:
+                break
+        _wake_queue.put({
+            "text": text,
+            "confidence": params.get("confidence", 1.0),
+        })
+        logger.info(f"Wake message queued: {text[:50]}")
+        self._json_response(200, {"success": True, "queued": True})
+
     def _read_json_body(self):
         """Read and parse JSON body. Returns dict or None (sends error response on failure)."""
         try:
@@ -662,15 +689,47 @@ async def _transcribe_audio(audio) -> dict:
         return {"success": False, "error": "transcription_failed", "message": str(e)}
 
 
+async def _listen_wake(timeout: float) -> dict:
+    """Poll wake message queue until a message arrives or timeout.
+
+    Does NOT set _listen_active — this is queue polling, not mic recording.
+    The menu bar icon should not show the orange indicator during wake polling.
+    """
+    start = time.time()
+    try:
+        while time.time() - start < timeout:
+            try:
+                msg = _wake_queue.get_nowait()
+                return {
+                    "success": True,
+                    "text": msg["text"],
+                    "source": "wake",
+                    "confidence": msg.get("confidence", 1.0),
+                }
+            except queue_mod.Empty:
+                await asyncio.sleep(1)
+        return {"success": False, "error": "timeout", "message": "No wake message received within timeout"}
+    finally:
+        pass  # No cleanup needed — wake mode doesn't use mic or set _listen_active
+
+
 @mcp.tool()
-async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float = 1.5) -> dict:
+async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float = 1.5, mode: str = "mic") -> dict:
     """Activate the microphone, record speech, and return transcribed text.
 
     Args:
         timeout: Maximum seconds to wait for speech (default 15).
         prompt: Optional context about what the AI is asking.
         silence_threshold: Seconds of silence before stopping (default 1.5).
+        mode: "mic" (default) to record from microphone, or "wake" to wait for
+              a wake word message from the VoiceSmith menu bar app. In wake mode,
+              the mic is NOT opened — the tool polls a message queue and returns
+              when a message arrives (posted via POST /wake_message).
     """
+    # Wake mode: poll message queue, no mic
+    if mode == "wake":
+        return await _listen_wake(timeout)
+
     global _listen_active, _listen_cancel_event
 
     if _stt_engine is None or _mic_capture is None:

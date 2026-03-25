@@ -290,6 +290,97 @@ if [ "$(uname)" = "Darwin" ]; then
         warn "clang not found — microphone may not work in all terminals"
         info "Install Xcode Command Line Tools to enable the mic launcher: xcode-select --install"
     fi
+
+    # ── Menu Bar App (VoiceSmith.app) ────────────────────────────────────
+    MENUBAR_SRC="$SCRIPT_DIR/menubar/VoiceSmithMenu.swift"
+    MENUBAR_PLIST_TEMPLATE="$SCRIPT_DIR/menubar/com.voicesmith-mcp.menubar.plist"
+    MENUBAR_APP="$INSTALL_DIR/VoiceSmith.app"
+    MENUBAR_BINARY="$MENUBAR_APP/Contents/MacOS/VoiceSmith"
+    MENUBAR_ICON_SRC="$SCRIPT_DIR/menubar/app-icon.png"
+    MENUBAR_LAUNCHAGENT="$HOME/Library/LaunchAgents/com.voicesmith-mcp.menubar.plist"
+
+    if [ -f "$MENUBAR_SRC" ] && command -v swiftc &>/dev/null; then
+        mkdir -p "$MENUBAR_APP/Contents/MacOS"
+        mkdir -p "$MENUBAR_APP/Contents/Resources"
+
+        # Create Info.plist for the menu bar app
+        cat > "$MENUBAR_APP/Contents/Info.plist" << 'MBPLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>VoiceSmith</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.voicesmith-mcp.menubar</string>
+    <key>CFBundleName</key>
+    <string>VoiceSmith</string>
+    <key>CFBundleDisplayName</key>
+    <string>VoiceSmith</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>LSBackgroundOnly</key>
+    <true/>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+MBPLIST
+
+        # Compile Swift menu bar app
+        menubar_ok=false
+        if swiftc -parse-as-library -framework SwiftUI -framework AppKit \
+            "$MENUBAR_SRC" -o "$MENUBAR_BINARY" 2>/dev/null; then
+            menubar_ok=true
+        fi
+
+        # Generate app icon (icns) from PNG if available
+        if $menubar_ok && [ -f "$MENUBAR_ICON_SRC" ]; then
+            ICONSET=$(mktemp -d)/AppIcon.iconset
+            mkdir -p "$ICONSET"
+            for size in 16 32 64 128 256 512; do
+                sips -z $size $size "$MENUBAR_ICON_SRC" --out "$ICONSET/icon_${size}x${size}.png" 2>/dev/null
+            done
+            sips -z 32 32 "$MENUBAR_ICON_SRC" --out "$ICONSET/icon_16x16@2x.png" 2>/dev/null
+            sips -z 64 64 "$MENUBAR_ICON_SRC" --out "$ICONSET/icon_32x32@2x.png" 2>/dev/null
+            sips -z 256 256 "$MENUBAR_ICON_SRC" --out "$ICONSET/icon_128x128@2x.png" 2>/dev/null
+            sips -z 512 512 "$MENUBAR_ICON_SRC" --out "$ICONSET/icon_256x256@2x.png" 2>/dev/null
+            sips -z 1024 1024 "$MENUBAR_ICON_SRC" --out "$ICONSET/icon_512x512@2x.png" 2>/dev/null
+            iconutil -c icns "$ICONSET" -o "$MENUBAR_APP/Contents/Resources/AppIcon.icns" 2>/dev/null
+            rm -rf "$(dirname "$ICONSET")"
+        fi
+
+        # Codesign the menu bar app
+        if $menubar_ok; then
+            codesign -s - --force "$MENUBAR_APP" 2>/dev/null || true
+            ok "VoiceSmith menu bar app built"
+        else
+            warn "Menu bar app build failed (swiftc error) — menu bar will not be available"
+        fi
+
+        # Install menu bar LaunchAgent
+        if $menubar_ok && [ -f "$MENUBAR_PLIST_TEMPLATE" ]; then
+            mkdir -p "$HOME/Library/LaunchAgents"
+            sed "s|MENUBAR_BINARY|$MENUBAR_BINARY|g" \
+                "$MENUBAR_PLIST_TEMPLATE" > "$MENUBAR_LAUNCHAGENT"
+
+            launchctl unload "$MENUBAR_LAUNCHAGENT" 2>/dev/null || true
+            if launchctl load -w "$MENUBAR_LAUNCHAGENT" 2>/dev/null; then
+                ok "VoiceSmith menu bar started (runs at login)"
+            else
+                warn "Menu bar LaunchAgent install failed"
+            fi
+        fi
+    elif [ -f "$MENUBAR_SRC" ] && ! command -v swiftc &>/dev/null; then
+        warn "swiftc not found — menu bar app requires Xcode Command Line Tools"
+        info "Install with: xcode-select --install"
+    fi
 fi
 
 # ─── Step 3: Models ──────────────────────────────────────────────────────

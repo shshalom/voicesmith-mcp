@@ -6,6 +6,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
 const {
   INSTALL_DIR,
@@ -59,6 +60,22 @@ async function run() {
   }
 
   console.log("");
+
+  // Unload and remove LaunchAgents before deleting the install directory
+  const { execSync } = require("child_process");
+  const launchAgents = [
+    path.join(os.homedir(), "Library", "LaunchAgents", "com.voicesmith-mcp.audio.plist"),
+    path.join(os.homedir(), "Library", "LaunchAgents", "com.voicesmith-mcp.menubar.plist"),
+  ];
+  for (const plist of launchAgents) {
+    if (fileExists(plist)) {
+      try {
+        execSync(`launchctl unload "${plist}" 2>/dev/null`, { stdio: "ignore" });
+        fs.unlinkSync(plist);
+        logOk(`Removed LaunchAgent: ${path.basename(plist)}`);
+      } catch (e) { /* ignore */ }
+    }
+  }
 
   // Remove install directory (venv, models, server files, config)
   if (dirExists(INSTALL_DIR)) {

@@ -462,6 +462,122 @@ except Exception as e:
   }
 }
 
+// ─── Step 5b: Menu Bar App (macOS only) ──────────────────────────────────────
+
+async function step5b_menuBar() {
+  if (process.platform !== "darwin") return;
+
+  const menubarSrc = path.join(__dirname, "..", "menubar", "VoiceSmithMenu.swift");
+  const menubarIconSrc = path.join(__dirname, "..", "menubar", "app-icon.png");
+  const menubarPlistTemplate = path.join(__dirname, "..", "menubar", "com.voicesmith-mcp.menubar.plist");
+
+  if (!fs.existsSync(menubarSrc)) {
+    logWarn("Menu bar source not found — skipping");
+    return;
+  }
+
+  // Check for swiftc
+  if (!(await commandExists("swiftc"))) {
+    logWarn("swiftc not found — menu bar app requires Xcode Command Line Tools");
+    logInfo("Install with: xcode-select --install");
+    return;
+  }
+
+  const menubarApp = path.join(INSTALL_DIR, "VoiceSmith.app");
+  const menubarBinDir = path.join(menubarApp, "Contents", "MacOS");
+  const menubarResDir = path.join(menubarApp, "Contents", "Resources");
+  const menubarBinary = path.join(menubarBinDir, "VoiceSmith");
+  const menubarPlist = path.join(os.homedir(), "Library", "LaunchAgents", "com.voicesmith-mcp.menubar.plist");
+
+  // Create app bundle structure
+  fs.mkdirSync(menubarBinDir, { recursive: true });
+  fs.mkdirSync(menubarResDir, { recursive: true });
+
+  // Create Info.plist
+  const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>VoiceSmith</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.voicesmith-mcp.menubar</string>
+    <key>CFBundleName</key>
+    <string>VoiceSmith</string>
+    <key>CFBundleDisplayName</key>
+    <string>VoiceSmith</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>LSBackgroundOnly</key>
+    <true/>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>`;
+  fs.writeFileSync(path.join(menubarApp, "Contents", "Info.plist"), infoPlist);
+
+  // Compile Swift
+  logAction("Building VoiceSmith menu bar app...");
+  const buildResult = await runCommand("swiftc", [
+    "-parse-as-library",
+    "-framework", "SwiftUI",
+    "-framework", "AppKit",
+    menubarSrc,
+    "-o", menubarBinary,
+  ]);
+
+  if (!buildResult.success) {
+    logWarn("Menu bar build failed — menu bar will not be available");
+    return;
+  }
+
+  // Generate icon
+  if (fs.existsSync(menubarIconSrc)) {
+    const { execSync } = require("child_process");
+    const iconsetDir = path.join(os.tmpdir(), "VoiceSmithIcon.iconset");
+    fs.mkdirSync(iconsetDir, { recursive: true });
+    const sizes = [16, 32, 64, 128, 256, 512];
+    try {
+      for (const s of sizes) {
+        execSync(`sips -z ${s} ${s} "${menubarIconSrc}" --out "${path.join(iconsetDir, `icon_${s}x${s}.png`)}"`, { stdio: "ignore" });
+      }
+      execSync(`sips -z 32 32 "${menubarIconSrc}" --out "${path.join(iconsetDir, "icon_16x16@2x.png")}"`, { stdio: "ignore" });
+      execSync(`sips -z 64 64 "${menubarIconSrc}" --out "${path.join(iconsetDir, "icon_32x32@2x.png")}"`, { stdio: "ignore" });
+      execSync(`sips -z 256 256 "${menubarIconSrc}" --out "${path.join(iconsetDir, "icon_128x128@2x.png")}"`, { stdio: "ignore" });
+      execSync(`sips -z 512 512 "${menubarIconSrc}" --out "${path.join(iconsetDir, "icon_256x256@2x.png")}"`, { stdio: "ignore" });
+      execSync(`sips -z 1024 1024 "${menubarIconSrc}" --out "${path.join(iconsetDir, "icon_512x512@2x.png")}"`, { stdio: "ignore" });
+      execSync(`iconutil -c icns "${iconsetDir}" -o "${path.join(menubarResDir, "AppIcon.icns")}"`, { stdio: "ignore" });
+    } catch (e) { /* icon generation is optional */ }
+    fs.rmSync(iconsetDir, { recursive: true, force: true });
+  }
+
+  // Codesign
+  await runCommand("codesign", ["-s", "-", "--force", menubarApp]);
+  logActionDone("VoiceSmith menu bar app built");
+
+  // Install LaunchAgent
+  if (fs.existsSync(menubarPlistTemplate)) {
+    fs.mkdirSync(path.dirname(menubarPlist), { recursive: true });
+    let plistContent = fs.readFileSync(menubarPlistTemplate, "utf8");
+    plistContent = plistContent.replace(/MENUBAR_BINARY/g, menubarBinary);
+    fs.writeFileSync(menubarPlist, plistContent);
+
+    await runCommand("launchctl", ["unload", menubarPlist]);
+    const loadResult = await runCommand("launchctl", ["load", "-w", menubarPlist]);
+    if (loadResult.success) {
+      logOk("VoiceSmith menu bar started (runs at login)");
+    } else {
+      logWarn("Menu bar LaunchAgent install failed");
+    }
+  }
+}
+
 // ─── Voice Picker ────────────────────────────────────────────────────────────
 
 const DEFAULT_VOICES = [
@@ -726,6 +842,7 @@ async function run() {
   await step3_models();
   const configuredIdes = await step4_mcpConfig(targetIdes);
   await step5_microphone();
+  await step5b_menuBar();
   await step6_voiceRules(configuredIdes);
 
   const ideNames = (configuredIdes || [])

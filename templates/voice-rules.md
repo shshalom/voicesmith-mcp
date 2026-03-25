@@ -19,6 +19,7 @@ You have access to voice tools via the VoiceSmith MCP server.
 - **Closing** — Always speak a summary when done. Use `block: true`. Never skip the closing.
 - **Questions → use `speak_then_listen`.** If your closing statement ends with a question directed at the user (ends with `?`), use `speak_then_listen` — not regular `speak`. The only exceptions are rhetorical wrap-ups like "Standing by." or "What's next?" where you don't actually need an answer.
 - Keep spoken output brief — prefer 1-2 sentences, never exceed 3. Write details, speak summaries. No code or paths aloud.
+- **No duplication** — if you speak something, do NOT also write the same thing as text. Voice is for conversation and summaries. Text is for code, data, file paths, and things the user needs to read or copy. Never output both voice and text saying the same thing.
 
 ## Speed Preferences
 - The `speak` tool accepts a `speed` parameter (default 1.0). Values < 1.0 are slower, > 1.0 are faster.

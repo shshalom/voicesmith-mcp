@@ -151,11 +151,13 @@ def transcribe_local(audio: np.ndarray) -> Optional[dict]:
         return None
 
 
-def inject_text(text: str):
-    """Inject text into the target session via tmux or AppleScript."""
+def deliver_message(text: str):
+    """Deliver transcribed wake message to the target session via HTTP."""
+    import urllib.request
     sessions = read_sessions()
     message = text
     target_name = "unknown"
+    target_port = None
 
     # Multi-session routing: parse first word as session name
     if len(sessions) > 1:
@@ -165,49 +167,48 @@ def inject_text(text: str):
             for s in sessions:
                 if first_word.lower() == s.get("name", "").lower():
                     target_name = s["name"]
+                    target_port = s.get("port")
                     message = words[1] if len(words) > 1 else ""
                     break
-    if target_name == "unknown" and sessions:
-        target_name = sessions[-1].get("name", "unknown")
+
+    # Default to most recently active session
+    if target_port is None and sessions:
+        # Find the one with lowest last_tool_call_age (most active)
+        best = sessions[-1]
+        for s in sessions:
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{s['port']}/status", timeout=1) as resp:
+                    status = json.loads(resp.read())
+                    age = status.get("last_tool_call_age_s", 999999)
+                    if age < 999999:
+                        best = s
+            except Exception:
+                continue
+        target_port = best.get("port")
+        target_name = best.get("name", "unknown")
 
     if not message.strip():
         emit("ERROR", "empty message after name parsing")
         return
 
-    # Try tmux first (if sessions have tmux_session)
-    tmux_sessions = [s for s in sessions if s.get("tmux_session")]
-    if tmux_sessions:
-        target = tmux_sessions[-1]
-        for s in tmux_sessions:
-            if s.get("name", "").lower() == target_name.lower():
-                target = s
-                break
-        tmux_target = target["tmux_session"]
-        try:
-            subprocess.run(["tmux", "send-keys", "-t", tmux_target, "-l", message],
-                           capture_output=True, timeout=5)
-            time.sleep(0.3)
-            subprocess.run(["tmux", "send-keys", "-t", tmux_target, "C-m"],
-                           capture_output=True, timeout=5)
-            emit("INJECTED", target_name)
-            return
-        except Exception:
-            pass  # Fall through to AppleScript
+    if target_port is None:
+        emit("ERROR", "no active session to deliver to")
+        return
 
-    # AppleScript: type into the frontmost app
+    # Deliver via HTTP POST /wake_message
     try:
-        # Escape for AppleScript
-        escaped = message.replace("\\", "\\\\").replace('"', '\\"')
-        script = f'''
-            tell application "System Events"
-                keystroke "{escaped}"
-                keystroke return
-            end tell
-        '''
-        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5)
-        emit("INJECTED", target_name)
+        url = f"http://127.0.0.1:{target_port}/wake_message"
+        body = json.dumps({"text": message}).encode()
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            result = json.loads(resp.read())
+            if result.get("success"):
+                emit("DELIVERED", target_name)
+            else:
+                emit("ERROR", f"delivery failed: {result}")
     except Exception as e:
-        emit("ERROR", f"injection failed: {e}")
+        emit("ERROR", f"delivery failed: {e}")
 
 
 def play_ready_sound():
@@ -439,7 +440,7 @@ def run(model_name: str, threshold: float, socket_path: str):
                             if port:
                                 result = transcribe_audio(audio, port)
                                 if result and result.get("success") and result.get("text"):
-                                    inject_text(result["text"])
+                                    deliver_message(result["text"])
                                 else:
                                     emit("ERROR", "transcription failed or empty")
                             else:

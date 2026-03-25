@@ -17,7 +17,11 @@
     "hooks/",
     "tts/",
     "stt/",
-    "templates/"
+    "templates/",
+    "menubar/VoiceSmithMenu.swift",
+    "menubar/app-icon.png",
+    "menubar/com.voicesmith-mcp.menubar.plist",
+    "launcher/"
   ],
   "keywords": [
     "mcp",

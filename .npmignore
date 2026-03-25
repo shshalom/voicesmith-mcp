@@ -18,4 +18,13 @@ voice-input.sh
 SPEC.md
 SPEC-push-to-talk.md
 SPEC-wake-word.md
+SPEC-wake-v2.md
+SPEC-wake-v3.md
+SPEC-menubar.md
+REVIEW-menubar.md
 TODO.md
+CHANGELOG.md
+CLAUDE.md
+menubar/voicesmith-menu
+menubar/app-icon-menubar.png
+wake_detector.py

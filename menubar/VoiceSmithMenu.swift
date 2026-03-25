@@ -544,11 +544,12 @@ class AppState: ObservableObject {
     }
 
     func openRulesEditor() {
-        for (ideName, path) in ideRulesPaths {
-            if FileManager.default.fileExists(atPath: path.path) {
-                rulesPath = path; rulesIDEName = ideName
-                rulesText = (try? String(contentsOf: path, encoding: .utf8)) ?? ""
-                showRulesEditor = true; return
+        for (_, path) in ideRulesPaths {
+            let p = path.path(percentEncoded: false)
+            if FileManager.default.fileExists(atPath: p) {
+                // Open with the same app that handles config (text editor)
+                Process.launchedProcess(launchPath: "/usr/bin/open", arguments: ["-t", p])
+                return
             }
         }
     }
@@ -580,7 +581,9 @@ class AppState: ObservableObject {
         showRulesEditor = false
     }
 
-    func openConfig() { NSWorkspace.shared.open(configFile) }
+    func openConfig() {
+        Process.launchedProcess(launchPath: "/usr/bin/open", arguments: ["-t", configFile.path(percentEncoded: false)])
+    }
 
     // MARK: - Wake Word
 
@@ -1141,7 +1144,6 @@ struct MenuPanel: View {
                 // Toggles
                 toggleRow("Media Ducking", icon: "music.note", isOn: state.duckMedia, action: state.toggleDuck)
                 toggleRow("Nudge on Timeout", icon: "bubble.left", isOn: state.nudgeOnTimeout, action: state.toggleNudge)
-                toggleRow("Wake Word", icon: "ear", isOn: state.wakeEnabled, action: state.toggleWake)
 
                 Divider().padding(.vertical, 4)
 
@@ -1200,10 +1202,7 @@ struct MenuPanel: View {
 
                 Divider().padding(.vertical, 4)
 
-                menuButton("Edit Voice Rules...", icon: "doc.text") {
-                    state.openRulesEditor()
-                    openWindow(id: "rules-editor")
-                }
+                menuButton("Edit Voice Rules...", icon: "doc.text", action: state.openRulesEditor)
                 menuButton("Open Config...", icon: "gearshape", action: state.openConfig)
 
                 if let latest = state.latestVersion, let installed = state.installedVersion, latest != installed {

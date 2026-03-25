@@ -94,36 +94,29 @@ except:
         fi
     fi
 
-    # Fallback: read sessions.json directly if HTTP call didn't work
-    if [ -z "$SESSION_NAME" ]; then
-        SESSION_INFO=$(python3 -c "
-import json, os
+    # Fallback: query the server's /status endpoint for the actual name
+    if [ -z "$SESSION_NAME" ] && [ -n "$PORT" ]; then
+        STATUS=$(curl -s --max-time 2 "http://127.0.0.1:$PORT/status" 2>/dev/null)
+        if [ -n "$STATUS" ]; then
+            SESSION_NAME=$(echo "$STATUS" | python3 -c "
+import sys, json
 try:
-    with open('$SESSIONS_FILE') as f:
-        data = json.load(f)
-    tmux = os.environ.get('VOICESMITH_TMUX', '')
-    for s in data.get('sessions', []):
-        try:
-            os.kill(s['pid'], 0)
-            if tmux and s.get('tmux_session') == tmux:
-                print(f\"{s['name']}|{s['voice']}\")
-                raise SystemExit
-        except (OSError, ProcessLookupError):
-            pass
-    for s in reversed(data.get('sessions', [])):
-        try:
-            os.kill(s['pid'], 0)
-            print(f\"{s['name']}|{s['voice']}\")
-            break
-        except (OSError, ProcessLookupError):
-            pass
+    d = json.load(sys.stdin)
+    # Check session object first (new servers), fall back to top-level name
+    s = d.get('session') or d
+    print(s.get('name', ''))
 except:
     pass
 " 2>/dev/null)
-
-        if [ -n "$SESSION_INFO" ]; then
-            SESSION_NAME=$(echo "$SESSION_INFO" | cut -d'|' -f1)
-            SESSION_VOICE=$(echo "$SESSION_INFO" | cut -d'|' -f2)
+            SESSION_VOICE=$(echo "$STATUS" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    s = d.get('session') or d
+    print(s.get('voice', ''))
+except:
+    pass
+" 2>/dev/null)
         fi
     fi
 fi

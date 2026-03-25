@@ -122,19 +122,32 @@ class VoiceRegistry:
             logger.warning("No config path specified, cannot save registry")
             return
 
-        data = {}
-        if path.exists():
-            try:
-                with open(path) as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning(f"Error reading config for save: {e}")
+        if not path.exists():
+            logger.warning("Config file does not exist, cannot save registry")
+            return
+
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Error reading config for save: {e} — skipping to avoid data loss")
+            return
 
         data["voice_registry"] = dict(self._registry)
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
+        # Atomic write: temp file + rename (prevents partial writes)
+        import tempfile, os
+        try:
+            fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp", prefix=".config-")
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, path)
+        except Exception as e:
+            logger.warning(f"Failed to save registry: {e}")
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
         logger.debug(f"Saved registry ({self.size} entries) to {path}")
 
