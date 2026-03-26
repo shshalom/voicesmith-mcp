@@ -646,46 +646,33 @@ class AppState: ObservableObject {
             audioOutputDevices = mpvDevices
         }
 
-        // Fallback: query sounddevice via Python for input devices
-        // Try venv Python first, then system Python
-        let pythonCandidates = [
-            dataDir.appendingPathComponent(".venv/bin/python3").path(percentEncoded: false),
-            "/opt/homebrew/bin/python3",
-            "/usr/local/bin/python3",
-            "/usr/bin/python3",
-        ]
-        let pythonPath = pythonCandidates.first { FileManager.default.fileExists(atPath: $0) }
-        if let pythonPath = pythonPath {
-            let pyTask = Process()
-            pyTask.executableURL = URL(fileURLWithPath: pythonPath)
-            pyTask.arguments = ["-c", """
-                import sys
-                sys.path.insert(0, '\(dataDir.appendingPathComponent(".venv/lib").path(percentEncoded: false))')
-                # Try to find sounddevice in the venv's site-packages
-                import glob
-                venv_sp = glob.glob('\(dataDir.path(percentEncoded: false))/.venv/lib/python*/site-packages')
-                for sp in venv_sp:
-                    if sp not in sys.path:
-                        sys.path.insert(0, sp)
-                try:
-                    import sounddevice as sd, json
-                    devices = []
-                    for i, d in enumerate(sd.query_devices()):
-                        if d['max_input_channels'] > 0:
-                            devices.append({"index": i, "name": d["name"], "default": i == sd.default.device[0]})
-                    print(json.dumps(devices))
-                except ImportError:
-                    print("[]")
-            """]
-            let pyPipe = Pipe()
-            pyTask.standardOutput = pyPipe
-            pyTask.standardError = FileHandle.nullDevice
-            try? pyTask.run()
-            pyTask.waitUntilExit()
-            let pyOutput = pyPipe.fileHandleForReading.readDataToEndOfFile()
-            if let devices = try? JSONSerialization.jsonObject(with: pyOutput) as? [[String: Any]] {
-                audioInputDevices = devices
+        // Query input devices via system_profiler (native macOS, no Python needed)
+        let spTask = Process()
+        spTask.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
+        spTask.arguments = ["SPAudioDataType", "-json"]
+        let spPipe = Pipe()
+        spTask.standardOutput = spPipe
+        spTask.standardError = FileHandle.nullDevice
+        try? spTask.run()
+        spTask.waitUntilExit()
+        let spData = spPipe.fileHandleForReading.readDataToEndOfFile()
+        if let json = try? JSONSerialization.jsonObject(with: spData) as? [String: Any],
+           let sections = json["SPAudioDataType"] as? [[String: Any]] {
+            var inputs: [[String: Any]] = []
+            var idx = 0
+            for section in sections {
+                if let items = section["_items"] as? [[String: Any]] {
+                    for item in items {
+                        let name = item["_name"] as? String ?? ""
+                        let inputChannels = item["coreaudio_device_input"] as? Int ?? 0
+                        if inputChannels > 0 {
+                            inputs.append(["index": idx, "name": name, "default": false])
+                            idx += 1
+                        }
+                    }
+                }
             }
+            audioInputDevices = inputs
         }
     }
 
