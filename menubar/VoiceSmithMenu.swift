@@ -592,6 +592,24 @@ class AppState: ObservableObject {
         showRulesEditor = false
     }
 
+    var outputDeviceDisplayName: String {
+        guard let deviceId = currentOutputDevice else { return "Default" }
+        if let device = audioOutputDevices.first(where: { ($0["id"] as? String) == deviceId }),
+           let name = device["name"] as? String, !name.isEmpty {
+            return name
+        }
+        return deviceId
+    }
+
+    var inputDeviceDisplayName: String {
+        guard let idx = currentInputDevice else { return "Default" }
+        if let device = audioInputDevices.first(where: { ($0["index"] as? Int) == idx }),
+           let name = device["name"] as? String, !name.isEmpty {
+            return name
+        }
+        return "Device \(idx)"
+    }
+
     func openConfig() {
         Process.launchedProcess(launchPath: "/usr/bin/open", arguments: ["-t", configFile.path(percentEncoded: false)])
     }
@@ -1361,7 +1379,7 @@ struct MenuPanel: View {
                         Image(systemName: "speaker.wave.2").frame(width: 16).foregroundColor(.secondary)
                         Text("Audio Output").font(.system(size: 12))
                         Spacer()
-                        Text(state.currentOutputDevice ?? "Default")
+                        Text(state.outputDeviceDisplayName)
                             .font(.system(size: 10)).foregroundColor(.secondary).lineLimit(1)
                     }
                 }
@@ -1395,7 +1413,7 @@ struct MenuPanel: View {
                         Image(systemName: "mic").frame(width: 16).foregroundColor(.secondary)
                         Text("Audio Input").font(.system(size: 12))
                         Spacer()
-                        Text(state.currentInputDevice != nil ? "Custom" : "Default")
+                        Text(state.inputDeviceDisplayName)
                             .font(.system(size: 10)).foregroundColor(.secondary)
                     }
                 }
