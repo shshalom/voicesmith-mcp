@@ -206,6 +206,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "/transcribe": self._handle_transcribe,
             "/wake_message": self._handle_wake_message,
             "/audio_devices": self._handle_audio_devices,
+            "/channel_send": self._handle_channel_send,
         }
         handler = handlers.get(self.path)
         if handler:
@@ -508,6 +509,30 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
         })
         logger.info(f"Wake message queued: {text[:50]}")
         self._json_response(200, {"success": True, "queued": True})
+
+    def _handle_channel_send(self):
+        """Test: send a channel notification to Claude Code via stdout."""
+        params = self._read_json_body()
+        if params is None:
+            return
+        text = params.get("text", "")
+        if not text:
+            self._json_response(400, {"error": "missing_text"})
+            return
+        notification = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "notifications/claude/channel",
+            "params": {
+                "content": text,
+                "meta": {"source": "voicesmith"}
+            }
+        })
+        # Write directly to stdout — the MCP transport to Claude Code
+        import sys
+        sys.stdout.write(notification + "\n")
+        sys.stdout.flush()
+        logger.info(f"Channel notification sent: {text[:50]}")
+        self._json_response(200, {"success": True, "sent": True})
 
     def _handle_audio_devices(self):
         """List audio devices — used by menu bar for device picker."""
