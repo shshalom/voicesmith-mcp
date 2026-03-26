@@ -7,15 +7,15 @@ VoiceSmith MCP has grown beyond basic TTS/STT. It now includes media ducking, wa
 ## Overview
 
 - **Platform:** macOS only (matches VoiceSmithMCP.app native launcher)
-- **Framework:** `rumps` (Python, lightweight menu bar apps) or SwiftUI (native)
+- **Framework:** SwiftUI (native macOS) — compiled with `swiftc`, single-file implementation
 - **Communication:** HTTP polling against each session's `/status` endpoint + config mutations via `POST /config`
-- **Install:** Optional — bundled with the installer, enabled via `--with-menubar` flag
+- **Install:** Built and installed automatically by both `install.sh` and `npx voicesmith-mcp install`
 
 ---
 
 ## Menu Bar Icon
 
-The icon reflects the current mic/voice state at a glance. **All icons are static PNGs** (6 variants required — `rumps` does not support animation):
+The icon reflects the current mic/voice state at a glance. Icons are composited programmatically using SF Symbols and NSImage drawing:
 
 | State | Icon | Description |
 |-------|------|-------------|
@@ -28,7 +28,7 @@ The icon reflects the current mic/voice state at a glance. **All icons are stati
 
 The icon updates by polling active sessions. Poll interval: **2 seconds while menu is open, 10 seconds while closed** (reduces unnecessary load).
 
-If animated pulsing is desired in the future, this is a reason to migrate to SwiftUI (see Framework Decision).
+The orange pill indicator (38×24pt) shows during active recording — composited as an NSImage with rounded rect background and white mic SF Symbol.
 
 ---
 
@@ -410,18 +410,15 @@ Menu bar app is not installed. All functionality remains available via MCP tools
 
 ## Framework Decision
 
-| Option | Pros | Cons |
-|--------|------|------|
-| **rumps (Python)** | Same language as server, can import shared.py directly, quick to build | Requires Python process running, ~30MB memory, no icon animation, less native feel |
-| **SwiftUI (native)** | Native macOS look, tiny memory (~5MB), smooth animations, Core Animation for pulsing icons | Separate language, can't share code with server, harder to maintain |
-| **Electron** | Cross-platform potential | Massive overhead (~100MB), overkill |
+**Chosen: SwiftUI (native macOS)**
 
-**Recommendation:** Start with `rumps` (Python) for speed. The HTTP API is the same either way, making a future SwiftUI migration straightforward. If animated icons or native polish become requirements, migrate to SwiftUI.
+| Option | Pros | Cons | Status |
+|--------|------|------|--------|
+| **SwiftUI (native)** | Native macOS look, ~5MB memory, SF Symbols, Core Animation, `MenuBarExtra` API | Separate language from server | **Implemented** |
+| rumps (Python) | Same language as server | ~30MB memory, no animation, NSMenu bugs, Dock icon issues | Evaluated and rejected |
+| Electron | Cross-platform | ~100MB overhead | Not considered |
 
-**rumps limitations to be aware of:**
-- No icon animation (must use static PNGs for all states)
-- No section headers in submenus (use nested submenus for voice grouping)
-- Icon updates must happen on the main thread (use `rumps.Timer` for polling, not raw threads)
+SwiftUI was chosen for native feel, low memory, proper `NSStatusItem` behavior, and `MenuBarExtra` with `.window` style for rich panel UI. The HTTP API is language-agnostic — the Swift app communicates with the Python server via the same HTTP endpoints.
 
 ---
 
@@ -443,20 +440,18 @@ These server changes are required **before** the menu bar app can function corre
 
 ## Files to Create/Modify
 
-| File | Action | What |
+| File | Status | What |
 |------|--------|------|
-| `menubar/app.py` | Create | Menu bar app (rumps-based) |
-| `menubar/__init__.py` | Create | Python package init |
-| `menubar/icons/` | Create | 6 static PNG icon variants (dim, normal, recording, blue, crossed, red) |
-| `server.py` | Modify | Switch to `ThreadingHTTPServer`, extend `/status`, add `/config`, `/set_voice`, `/stop`, `/mute`, `/unmute`, `/wake_enable`, `/wake_disable` HTTP endpoints, accept `block` in `/speak`, fix `_start_periodic_save_thread` |
-| `config.py` | Modify | Add `check_updates` field |
-| `config.json` | Modify | Add `check_updates: true` default |
-| `shared.py` | Reference | Voice list constants (`ALL_VOICE_IDS`, `VOICE_NAME_MAP`) — imported by menu bar app |
-| `session_registry.py` | Reference | Menu bar reads `sessions.json` with `LOCK_SH` — uses same file format |
-| `bin/install.js` | Modify | `--with-menubar` flag, LaunchAgent setup |
-| `bin/uninstall.js` | Modify | Remove menubar app and LaunchAgent |
-| `install.sh` | Modify | Same additions for shell installer |
-| `com.voicesmith-mcp.menubar.plist` | Create | LaunchAgent for auto-start (with `KeepAlive`, `ThrottleInterval`) |
+| `menubar/VoiceSmithMenu.swift` | ✅ Done | Native SwiftUI menu bar app (~1400 lines) |
+| `menubar/app-icon.png` | ✅ Done | App icon for Activity Monitor / Login Items |
+| `menubar/com.voicesmith-mcp.menubar.plist` | ✅ Done | LaunchAgent template for auto-start |
+| `server.py` | ✅ Done | ThreadingHTTPServer, extended /status, /config, /set_voice, /stop, /mute, /unmute, /wake_enable, /wake_disable, /transcribe, /wake_message, /audio_devices endpoints, listen(mode="wake"), list_audio_devices tool, periodic save fix |
+| `config.py` | ✅ Done | audio_output_device, audio_input_device, check_updates, nudge_on_timeout fields |
+| `tts/audio_player.py` | ✅ Done | Live config read for audio output device, --audio-device flag for mpv |
+| `stt/mic_capture.py` | ✅ Done | Audio input device index for sounddevice |
+| `bin/install.js` | ✅ Done | Swift compilation, app bundle, LaunchAgent setup |
+| `bin/uninstall.js` | ✅ Done | LaunchAgent unload and cleanup |
+| `install.sh` | ✅ Done | Swift compilation, app bundle, LaunchAgent, --uninstall flag |
 
 ---
 

@@ -77,6 +77,37 @@ In a meeting or shared space? Just ask:
 
 The AI continues working normally — it just won't play audio. Say *"unmute"* when you're ready.
 
+---
+
+### Menu Bar App (macOS)
+
+On macOS, VoiceSmith includes a native menu bar app for hands-free control:
+
+- **Session Activity** — see all active sessions with real-time sparkline graphs
+- **Quick toggles** — Media Ducking, Nudge on Timeout
+- **Voice switcher** — browse and change from 54 voices, nested by language
+- **Whisper model** — switch between base/small/medium/large-v3 with inline download progress
+- **Audio devices** — choose audio output and input devices
+- **Voice rules** — edit or reset to default
+- **Updates** — check and install new versions
+
+The menu bar app starts automatically at login and runs independently from IDE sessions.
+
+---
+
+### Audio Device Selection
+
+Choose specific audio output (speakers/headphones) and input (microphone) devices from the menu bar app, or in config:
+
+```json
+{
+  "tts": { "audio_output_device": "coreaudio/BuiltInSpeakerDevice" },
+  "stt": { "audio_input_device": 1 }
+}
+```
+
+Changes take effect immediately — no restart needed. If a configured device is unavailable, falls back to system default.
+
 ## Alternative Install
 
 If you don't have Node.js or prefer a shell script:
