@@ -108,6 +108,12 @@ Choose specific audio output (speakers/headphones) and input (microphone) device
 
 Changes take effect immediately — no restart needed. If a configured device is unavailable, falls back to system default.
 
+---
+
+### Interrupting Speech
+
+Press **Escape** while the AI is speaking to stop audio immediately. The AI stops mid-sentence and waits for your next input.
+
 ## Alternative Install
 
 If you don't have Node.js or prefer a shell script:
@@ -118,7 +124,7 @@ cd voicesmith-mcp
 ./install.sh
 ```
 
-Supports the same flags: `--claude`, `--cursor`, `--codex`, `--all`.
+Supports the same flags: `--claude`, `--cursor`, `--codex`, `--all`, `--uninstall`.
 
 ## MCP Tools
 
@@ -135,6 +141,7 @@ Once installed, your AI assistant has access to these tools:
 | `mute` / `unmute` | Silence or resume voice output |
 | `stop` | Stop playback or cancel an active recording |
 | `status` | Server health and session info |
+| `list_audio_devices` | List available audio input and output devices |
 
 ## How It Works
 
@@ -247,9 +254,11 @@ This can happen when another session is holding your preferred voice name. Ask t
 
 ```bash
 npx voicesmith-mcp uninstall
+# or if installed via git clone:
+./install.sh --uninstall
 ```
 
-Removes all files, models, MCP config entries, and voice rules cleanly.
+Removes all files, models, MCP config entries, voice rules, LaunchAgents, and hooks cleanly.
 
 ## License
 
