@@ -669,6 +669,13 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
             "duration_ms": round(result.duration_ms, 1),
             "synthesis_ms": round(result.synthesis_ms, 1),
         }
+    except asyncio.CancelledError:
+        # User interrupted (Escape key) — stop audio immediately
+        if _speech_queue is not None:
+            _speech_queue.stop()
+        logger.info("speak cancelled by user — audio stopped")
+        # Re-raise so the MCP framework handles cancellation properly
+        raise
     except Exception as e:
         logger.error(f"speak failed: {e}")
         response = {"success": False, "error": "speak_failed", "message": str(e)}

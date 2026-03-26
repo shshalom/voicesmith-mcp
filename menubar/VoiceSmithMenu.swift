@@ -615,41 +615,67 @@ class AppState: ObservableObject {
         }
 
         // Fallback: query mpv directly for output devices
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/mpv")
-        task.arguments = ["--audio-device=help"]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        var mpvDevices: [[String: Any]] = []
-        for line in output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("'"), let endQuote = trimmed.dropFirst().firstIndex(of: "'") {
-                let deviceId = String(trimmed[trimmed.index(after: trimmed.startIndex)...trimmed.index(before: endQuote)])
-                let rest = String(trimmed[trimmed.index(after: endQuote)...]).trimmingCharacters(in: .whitespaces)
-                let name = rest.trimmingCharacters(in: CharacterSet(charactersIn: "()")).trimmingCharacters(in: .whitespaces)
-                if !deviceId.isEmpty {
-                    mpvDevices.append(["id": deviceId, "name": name.isEmpty ? deviceId : name])
+        // Find mpv in common locations
+        let mpvPaths = ["/opt/homebrew/bin/mpv", "/usr/local/bin/mpv", "/usr/bin/mpv"]
+        let mpvPath = mpvPaths.first { FileManager.default.fileExists(atPath: $0) }
+        if let mpvPath = mpvPath {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: mpvPath)
+            task.arguments = ["--audio-device=help"]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = FileHandle.nullDevice
+            try? task.run()
+            task.waitUntilExit()
+            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            var mpvDevices: [[String: Any]] = []
+            var seenNames = Set<String>()
+            for line in output.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("'"), let endQuote = trimmed.dropFirst().firstIndex(of: "'") {
+                    let deviceId = String(trimmed[trimmed.index(after: trimmed.startIndex)...trimmed.index(before: endQuote)])
+                    let rest = String(trimmed[trimmed.index(after: endQuote)...]).trimmingCharacters(in: .whitespaces)
+                    let name = rest.trimmingCharacters(in: CharacterSet(charactersIn: "()")).trimmingCharacters(in: .whitespaces)
+                    // Only include coreaudio devices (skip avfoundation duplicates) and deduplicate by name
+                    if !deviceId.isEmpty && deviceId.hasPrefix("coreaudio/") && !seenNames.contains(name) {
+                        seenNames.insert(name)
+                        mpvDevices.append(["id": deviceId, "name": name.isEmpty ? deviceId : name])
+                    }
                 }
             }
+            audioOutputDevices = mpvDevices
         }
-        audioOutputDevices = mpvDevices
 
         // Fallback: query sounddevice via Python for input devices
-        let pythonPath = dataDir.appendingPathComponent(".venv/bin/python3").path(percentEncoded: false)
-        if FileManager.default.fileExists(atPath: pythonPath) {
+        // Try venv Python first, then system Python
+        let pythonCandidates = [
+            dataDir.appendingPathComponent(".venv/bin/python3").path(percentEncoded: false),
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+            "/usr/bin/python3",
+        ]
+        let pythonPath = pythonCandidates.first { FileManager.default.fileExists(atPath: $0) }
+        if let pythonPath = pythonPath {
             let pyTask = Process()
             pyTask.executableURL = URL(fileURLWithPath: pythonPath)
             pyTask.arguments = ["-c", """
-                import sounddevice as sd, json
-                devices = []
-                for i, d in enumerate(sd.query_devices()):
-                    if d['max_input_channels'] > 0:
-                        devices.append({"index": i, "name": d["name"], "default": i == sd.default.device[0]})
-                print(json.dumps(devices))
+                import sys
+                sys.path.insert(0, '\(dataDir.appendingPathComponent(".venv/lib").path(percentEncoded: false))')
+                # Try to find sounddevice in the venv's site-packages
+                import glob
+                venv_sp = glob.glob('\(dataDir.path(percentEncoded: false))/.venv/lib/python*/site-packages')
+                for sp in venv_sp:
+                    if sp not in sys.path:
+                        sys.path.insert(0, sp)
+                try:
+                    import sounddevice as sd, json
+                    devices = []
+                    for i, d in enumerate(sd.query_devices()):
+                        if d['max_input_channels'] > 0:
+                            devices.append({"index": i, "name": d["name"], "default": i == sd.default.device[0]})
+                    print(json.dumps(devices))
+                except ImportError:
+                    print("[]")
             """]
             let pyPipe = Pipe()
             pyTask.standardOutput = pyPipe
