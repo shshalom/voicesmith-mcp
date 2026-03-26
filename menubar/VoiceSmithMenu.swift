@@ -188,6 +188,10 @@ class AppState: ObservableObject {
     @Published var currentModelSize = "base"
     @Published var configuredModelSize = "base"
     @Published var currentVoice = ""
+    @Published var audioInputDevices: [[String: Any]] = []
+    @Published var audioOutputDevices: [[String: Any]] = []
+    @Published var currentInputDevice: Int? = nil   // sounddevice index
+    @Published var currentOutputDevice: String? = nil  // mpv device name
     @Published var latestVersion: String?
     @Published var installedVersion: String?
     @Published var showRulesEditor = false
@@ -349,8 +353,15 @@ class AppState: ObservableObject {
         if let ww = cfg["wake_word"] as? [String: Any] {
             let enabled = ww["enabled"] as? Bool ?? false
             wakeEnabled = enabled
-            // Auto-start is handled by startPolling(), not here
         }
+        if let tts = cfg["tts"] as? [String: Any] {
+            currentOutputDevice = tts["audio_output_device"] as? String
+        }
+        if let stt = cfg["stt"] as? [String: Any] {
+            currentInputDevice = stt["audio_input_device"] as? Int
+        }
+        // Fetch device lists from server (once)
+        if audioInputDevices.isEmpty { fetchAudioDevices() }
     }
 
     private func readInstalledVersion() -> String? {
@@ -583,6 +594,112 @@ class AppState: ObservableObject {
 
     func openConfig() {
         Process.launchedProcess(launchPath: "/usr/bin/open", arguments: ["-t", configFile.path(percentEncoded: false)])
+    }
+
+    // MARK: - Audio Devices
+
+    func fetchAudioDevices() {
+        // Try server endpoint first
+        if let port = selectedPort,
+           let data = httpGet(port: port, path: "/audio_devices", timeout: 3),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           json["error"] == nil {
+            if let inputs = json["input"] as? [[String: Any]] { audioInputDevices = inputs }
+            if let mpvOutputs = json["mpv_output"] as? [[String: Any]] { audioOutputDevices = mpvOutputs }
+            else if let outputs = json["output"] as? [[String: Any]] { audioOutputDevices = outputs }
+            if let current = json["current"] as? [String: Any] {
+                currentInputDevice = current["input_device"] as? Int
+                currentOutputDevice = current["output_device"] as? String
+            }
+            return
+        }
+
+        // Fallback: query mpv directly for output devices
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/mpv")
+        task.arguments = ["--audio-device=help"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        var mpvDevices: [[String: Any]] = []
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("'"), let endQuote = trimmed.dropFirst().firstIndex(of: "'") {
+                let deviceId = String(trimmed[trimmed.index(after: trimmed.startIndex)...trimmed.index(before: endQuote)])
+                let rest = String(trimmed[trimmed.index(after: endQuote)...]).trimmingCharacters(in: .whitespaces)
+                let name = rest.trimmingCharacters(in: CharacterSet(charactersIn: "()")).trimmingCharacters(in: .whitespaces)
+                if !deviceId.isEmpty {
+                    mpvDevices.append(["id": deviceId, "name": name.isEmpty ? deviceId : name])
+                }
+            }
+        }
+        audioOutputDevices = mpvDevices
+
+        // Fallback: query sounddevice via Python for input devices
+        let pythonPath = dataDir.appendingPathComponent(".venv/bin/python3").path(percentEncoded: false)
+        if FileManager.default.fileExists(atPath: pythonPath) {
+            let pyTask = Process()
+            pyTask.executableURL = URL(fileURLWithPath: pythonPath)
+            pyTask.arguments = ["-c", """
+                import sounddevice as sd, json
+                devices = []
+                for i, d in enumerate(sd.query_devices()):
+                    if d['max_input_channels'] > 0:
+                        devices.append({"index": i, "name": d["name"], "default": i == sd.default.device[0]})
+                print(json.dumps(devices))
+            """]
+            let pyPipe = Pipe()
+            pyTask.standardOutput = pyPipe
+            pyTask.standardError = FileHandle.nullDevice
+            try? pyTask.run()
+            pyTask.waitUntilExit()
+            let pyOutput = pyPipe.fileHandleForReading.readDataToEndOfFile()
+            if let devices = try? JSONSerialization.jsonObject(with: pyOutput) as? [[String: Any]] {
+                audioInputDevices = devices
+            }
+        }
+    }
+
+    func setInputDevice(_ index: Int?) {
+        // Try HTTP first, fallback to direct config write
+        if let port = selectedPort {
+            let result = httpPost(port: port, path: "/config", body: ["key": "stt.audio_input_device", "value": index as Any? ?? NSNull()])
+            if result?["success"] as? Bool == true {
+                currentInputDevice = index
+                return
+            }
+        }
+        writeConfigValue(section: "stt", key: "audio_input_device", value: index as Any? ?? NSNull())
+        currentInputDevice = index
+    }
+
+    func setOutputDevice(_ deviceId: String?) {
+        // Try HTTP first, fallback to direct config write
+        if let port = selectedPort {
+            let result = httpPost(port: port, path: "/config", body: ["key": "tts.audio_output_device", "value": deviceId as Any? ?? NSNull()])
+            if result?["success"] as? Bool == true {
+                currentOutputDevice = deviceId
+                return
+            }
+        }
+        writeConfigValue(section: "tts", key: "audio_output_device", value: deviceId as Any? ?? NSNull())
+        currentOutputDevice = deviceId
+    }
+
+    private func writeConfigValue(section: String, key: String, value: Any) {
+        let path = configFile.path(percentEncoded: false)
+        guard FileManager.default.fileExists(atPath: path),
+              let data = try? Data(contentsOf: configFile),
+              var cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        var sect = cfg[section] as? [String: Any] ?? [:]
+        sect[key] = value is NSNull ? nil : value
+        cfg[section] = sect
+        if let jsonData = try? JSONSerialization.data(withJSONObject: cfg, options: .prettyPrinted) {
+            try? jsonData.write(to: configFile)
+        }
     }
 
     // MARK: - Wake Word
@@ -1199,6 +1316,78 @@ struct MenuPanel: View {
                         .buttonStyle(.plain)
                     }
                 }
+
+                Divider().padding(.vertical, 4)
+
+                // Audio Devices
+                DisclosureGroup {
+                    // Output
+                    Button(action: { state.setOutputDevice(nil) }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: state.currentOutputDevice == nil ? "checkmark" : "")
+                                .frame(width: 12)
+                            Text("System Default").font(.system(size: 11))
+                            Spacer()
+                        }.contentShape(Rectangle())
+                    }.buttonStyle(.plain).padding(.horizontal, 4).padding(.vertical, 1)
+
+                    ForEach(Array(state.audioOutputDevices.enumerated()), id: \.offset) { _, device in
+                        let deviceId = device["id"] as? String ?? ""
+                        let deviceName = device["name"] as? String ?? deviceId
+                        Button(action: { state.setOutputDevice(deviceId) }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: state.currentOutputDevice == deviceId ? "checkmark" : "")
+                                    .frame(width: 12)
+                                Text(deviceName).font(.system(size: 11)).lineLimit(1)
+                                Spacer()
+                            }.contentShape(Rectangle())
+                        }.buttonStyle(.plain).padding(.horizontal, 4).padding(.vertical, 1)
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "speaker.wave.2").frame(width: 16).foregroundColor(.secondary)
+                        Text("Audio Output").font(.system(size: 12))
+                        Spacer()
+                        Text(state.currentOutputDevice ?? "Default")
+                            .font(.system(size: 10)).foregroundColor(.secondary).lineLimit(1)
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 2)
+                .font(.system(size: 12))
+
+                DisclosureGroup {
+                    Button(action: { state.setInputDevice(nil) }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: state.currentInputDevice == nil ? "checkmark" : "")
+                                .frame(width: 12)
+                            Text("System Default").font(.system(size: 11))
+                            Spacer()
+                        }.contentShape(Rectangle())
+                    }.buttonStyle(.plain).padding(.horizontal, 4).padding(.vertical, 1)
+
+                    ForEach(Array(state.audioInputDevices.enumerated()), id: \.offset) { _, device in
+                        let idx = device["index"] as? Int ?? 0
+                        let name = device["name"] as? String ?? "Device \(idx)"
+                        Button(action: { state.setInputDevice(idx) }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: state.currentInputDevice == idx ? "checkmark" : "")
+                                    .frame(width: 12)
+                                Text(name).font(.system(size: 11)).lineLimit(1)
+                                Spacer()
+                            }.contentShape(Rectangle())
+                        }.buttonStyle(.plain).padding(.horizontal, 4).padding(.vertical, 1)
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "mic").frame(width: 16).foregroundColor(.secondary)
+                        Text("Audio Input").font(.system(size: 12))
+                        Spacer()
+                        Text(state.currentInputDevice != nil ? "Custom" : "Default")
+                            .font(.system(size: 10)).foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 2)
+                .font(.system(size: 12))
 
                 Divider().padding(.vertical, 4)
 

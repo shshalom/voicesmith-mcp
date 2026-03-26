@@ -82,8 +82,9 @@ def _socket_ready() -> bool:
 class MicCapture:
     """Microphone capture with voice activity detection."""
 
-    def __init__(self, sample_rate: int = STT_SAMPLE_RATE) -> None:
+    def __init__(self, sample_rate: int = STT_SAMPLE_RATE, audio_input_device: int | None = None) -> None:
         self._sample_rate = sample_rate
+        self._audio_input_device = audio_input_device
         self._recording = False
         self._audio_queue: queue.Queue = queue.Queue()
         self._stop_flag = False
@@ -285,13 +286,16 @@ class MicCapture:
 
         stream = None
         try:
-            stream = sd.InputStream(
+            stream_kwargs = dict(
                 samplerate=self._sample_rate,
                 channels=1,
                 dtype="float32",
                 blocksize=_CHUNK_SAMPLES,
                 callback=self._audio_callback,
             )
+            if self._audio_input_device is not None:
+                stream_kwargs["device"] = self._audio_input_device
+            stream = sd.InputStream(**stream_kwargs)
             stream.start()
             logger.info("Microphone recording started (sounddevice)")
 

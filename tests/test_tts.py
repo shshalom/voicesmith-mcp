@@ -51,6 +51,7 @@ def audio_player():
     with patch("tts.audio_player.AudioPlayer._command_exists", return_value=True):
         from tts.audio_player import AudioPlayer
         player = AudioPlayer("mpv")
+        player._config_path_override = ""  # Skip live config reads in tests
     return player
 
 

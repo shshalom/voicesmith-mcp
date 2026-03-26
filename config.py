@@ -28,6 +28,7 @@ class TTSConfig:
     default_speed: float = 1.0
     audio_player: str = "mpv"
     duck_media: bool = False
+    audio_output_device: Optional[str] = None  # mpv device name, None = system default
 
 
 @dataclass
@@ -38,6 +39,7 @@ class STTConfig:
     max_listen_timeout: float = 15
     vad_threshold: float = 0.3
     nudge_on_timeout: bool = False
+    audio_input_device: Optional[int] = None  # sounddevice device index, None = system default
 
 
 @dataclass
@@ -105,6 +107,8 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
                     config.tts.audio_player = tts["audio_player"]
                 if "duck_media" in tts:
                     config.tts.duck_media = bool(tts["duck_media"])
+                if "audio_output_device" in tts:
+                    config.tts.audio_output_device = tts["audio_output_device"]
 
             # STT config
             if "stt" in data:
@@ -121,6 +125,9 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
                     config.stt.vad_threshold = float(stt["vad_threshold"])
                 if "nudge_on_timeout" in stt:
                     config.stt.nudge_on_timeout = bool(stt["nudge_on_timeout"])
+                if "audio_input_device" in stt:
+                    val = stt["audio_input_device"]
+                    config.stt.audio_input_device = int(val) if val is not None else None
 
             # Top-level config
             if "main_agent" in data:
@@ -190,6 +197,7 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
             "default_speed": config.tts.default_speed,
             "audio_player": config.tts.audio_player,
             "duck_media": config.tts.duck_media,
+            "audio_output_device": config.tts.audio_output_device,
         },
         "stt": {
             "model_size": config.stt.model_size,
@@ -198,6 +206,7 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
             "max_listen_timeout": config.stt.max_listen_timeout,
             "vad_threshold": config.stt.vad_threshold,
             "nudge_on_timeout": config.stt.nudge_on_timeout,
+            "audio_input_device": config.stt.audio_input_device,
         },
         "main_agent": config.main_agent,
         "last_voice_name": config.last_voice_name,

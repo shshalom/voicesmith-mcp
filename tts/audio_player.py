@@ -17,8 +17,9 @@ logger = get_logger("tts.audio_player")
 class AudioPlayer:
     """Plays audio samples through an external player process."""
 
-    def __init__(self, player_command: str = "mpv") -> None:
+    def __init__(self, player_command: str = "mpv", audio_output_device: str | None = None) -> None:
         self._player_command = player_command
+        self._audio_output_device = audio_output_device
         self._process: subprocess.Popen | None = None
 
         # Detect platform fallback if player_command is not available
@@ -47,15 +48,52 @@ class AudioPlayer:
             return False
 
     def _build_command(self, path: str) -> list[str]:
-        """Build the player command list for the given audio file path."""
+        """Build the player command list for the given audio file path.
+
+        Re-reads audio_output_device from config on each call so device
+        changes take effect immediately without restarting the server.
+        """
         if self._player_command == "mpv":
-            return ["mpv", "--no-terminal", "--no-video", path]
+            cmd = ["mpv", "--no-terminal", "--no-video"]
+            # Check live config for device (picks up menu bar changes)
+            device = self._get_live_output_device()
+            if device:
+                cmd.extend([f"--audio-device={device}"])
+            cmd.append(path)
+            return cmd
         elif self._player_command == "afplay":
             return ["afplay", path]
         elif self._player_command == "aplay":
             return ["aplay", path]
         else:
             return [self._player_command, path]
+
+    _config_path_override: str | None = None  # For testing: set to skip live config reads
+
+    def _get_live_output_device(self) -> str | None:
+        """Read audio_output_device from config.json on each call.
+
+        Allows the menu bar to change the output device without restarting
+        the server. Falls back to the constructor value if config read fails.
+        """
+        if self._config_path_override == "":
+            return self._audio_output_device  # Testing mode: skip config read
+
+        try:
+            import json
+            from pathlib import Path
+            config_path = Path(self._config_path_override) if self._config_path_override else (
+                Path.home() / ".local" / "share" / "voicesmith-mcp" / "config.json"
+            )
+            if config_path.exists():
+                with open(config_path) as f:
+                    cfg = json.load(f)
+                device = cfg.get("tts", {}).get("audio_output_device")
+                if device is not None:
+                    return device
+        except Exception:
+            pass
+        return self._audio_output_device
 
     def play(self, samples, sample_rate: int) -> PlaybackResult:
         """Play audio samples through the configured player.

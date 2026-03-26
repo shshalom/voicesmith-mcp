@@ -98,7 +98,7 @@ def _init_tts(config: AppConfig):
 
     try:
         _tts_engine = KokoroEngine(config.tts.model_path, config.tts.voices_path)
-        _audio_player = AudioPlayer(config.tts.audio_player)
+        _audio_player = AudioPlayer(config.tts.audio_player, config.tts.audio_output_device)
         _speech_queue = SpeechQueue(_tts_engine, _audio_player, duck_media=config.tts.duck_media)
         logger.info("TTS subsystem initialized")
     except TTSEngineError as e:
@@ -127,7 +127,7 @@ def _init_stt(config: AppConfig):
         _vad = None
 
     if _stt_engine is not None:
-        _mic_capture = MicCapture(STT_SAMPLE_RATE)
+        _mic_capture = MicCapture(STT_SAMPLE_RATE, config.stt.audio_input_device)
         logger.info("STT subsystem initialized")
 
 
@@ -205,6 +205,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "/wake_disable": self._handle_wake_disable,
             "/transcribe": self._handle_transcribe,
             "/wake_message": self._handle_wake_message,
+            "/audio_devices": self._handle_audio_devices,
         }
         handler = handlers.get(self.path)
         if handler:
@@ -507,6 +508,18 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
         })
         logger.info(f"Wake message queued: {text[:50]}")
         self._json_response(200, {"success": True, "queued": True})
+
+    def _handle_audio_devices(self):
+        """List audio devices — used by menu bar for device picker."""
+        if _event_loop is None:
+            self._json_response(500, {"error": "server_not_ready"})
+            return
+        future = asyncio.run_coroutine_threadsafe(list_audio_devices(), _event_loop)
+        try:
+            result = future.result(timeout=10)
+            self._json_response(200, result)
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
 
     def _read_json_body(self):
         """Read and parse JSON body. Returns dict or None (sends error response on failure)."""
@@ -879,6 +892,71 @@ async def list_voices() -> dict:
         "voices": VOICE_METADATA,
         "total": len(VOICE_METADATA),
     }
+
+
+@mcp.tool()
+async def list_audio_devices() -> dict:
+    """List available audio input and output devices.
+
+    Returns input devices (microphones) and output devices (speakers/headphones)
+    with their names and indices. Use these to configure audio_input_device
+    and audio_output_device in config.
+    """
+    result = {"input": [], "output": []}
+
+    # Input devices (sounddevice)
+    try:
+        import sounddevice as sd
+        devices = sd.query_devices()
+        for i, d in enumerate(devices):
+            if d["max_input_channels"] > 0:
+                result["input"].append({
+                    "index": i,
+                    "name": d["name"],
+                    "channels": d["max_input_channels"],
+                    "default": i == sd.default.device[0],
+                })
+            if d["max_output_channels"] > 0:
+                result["output"].append({
+                    "index": i,
+                    "name": d["name"],
+                    "channels": d["max_output_channels"],
+                    "default": i == sd.default.device[1],
+                })
+    except Exception as e:
+        result["error"] = f"sounddevice query failed: {e}"
+
+    # Output devices (mpv)
+    if _audio_player and _audio_player._player_command == "mpv":
+        try:
+            import subprocess
+            proc = subprocess.run(
+                ["mpv", "--audio-device=help"],
+                capture_output=True, text=True, timeout=5,
+            )
+            mpv_devices = []
+            for line in proc.stdout.split("\n"):
+                line = line.strip()
+                if line.startswith("'") and "'" in line[1:]:
+                    parts = line.split("'", 2)
+                    if len(parts) >= 3:
+                        mpv_devices.append({
+                            "id": parts[1],
+                            "name": parts[2].strip().strip("()").strip(),
+                        })
+            if mpv_devices:
+                result["mpv_output"] = mpv_devices
+        except Exception:
+            pass
+
+    # Current config
+    if _config:
+        result["current"] = {
+            "input_device": _config.stt.audio_input_device,
+            "output_device": _config.tts.audio_output_device,
+        }
+
+    return result
 
 
 @mcp.tool()
