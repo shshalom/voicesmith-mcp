@@ -176,11 +176,11 @@ class TestKokoroEngine:
     def test_synthesize_duration_matches_samples(self, mock_kokoro_module):
         """Verify duration_ms is computed from sample count / sample_rate.
 
-        Note: KokoroEngine pads 100ms of tail silence to prevent clipping,
-        so 48000 samples at 24kHz + 2400 padding = 50400 samples = 2100ms.
+        Note: KokoroEngine pads 150ms head silence + 100ms tail silence,
+        so 48000 samples at 24kHz + 3600 head + 2400 tail = 54000 samples = 2250ms.
         """
         mock_module, mock_model = mock_kokoro_module
-        # 48000 samples at 24000 Hz = 2 seconds, plus 100ms tail padding
+        # 48000 samples at 24000 Hz = 2 seconds, plus 150ms head + 100ms tail padding
         samples = np.zeros(48000, dtype=np.float32)
         mock_model.create.return_value = (samples, 24000)
 
@@ -189,8 +189,8 @@ class TestKokoroEngine:
             engine = KokoroEngine("fake.onnx", "fake.bin")
 
         result = engine.synthesize("Long text", "am_eric")
-        # 48000 + 2400 (100ms padding at 24kHz) = 50400 samples = 2100ms
-        assert abs(result.duration_ms - 2100.0) < 1.0
+        # 48000 + 3600 (150ms head) + 2400 (100ms tail) = 54000 samples = 2250ms
+        assert abs(result.duration_ms - 2250.0) < 1.0
 
     def test_synthesize_propagates_engine_error(self, kokoro_engine):
         engine, mock_model = kokoro_engine

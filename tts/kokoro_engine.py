@@ -49,10 +49,17 @@ class KokoroEngine:
             samples, sample_rate = self._model.create(text, voice=voice_id, speed=speed)
             synthesis_ms = (time.perf_counter() - start) * 1000
 
-            # Pad 100ms silence — kokoro-onnx trim() snaps to 512-sample hops
-            # (~21ms at 24kHz) which can clip the trailing edge of the last phoneme.
-            pad = int(sample_rate * 0.10)
-            samples = np.concatenate([samples, np.zeros(pad, dtype=samples.dtype)])
+            # Pad silence at head and tail to prevent clipping.
+            # Head: audio devices need a moment to initialise after player starts.
+            # Tail: kokoro-onnx trim() snaps to 512-sample hops (~21ms at 24kHz)
+            #       which can clip the trailing edge of the last phoneme.
+            head_pad = int(sample_rate * 0.15)  # 150ms leading silence
+            tail_pad = int(sample_rate * 0.10)   # 100ms trailing silence
+            samples = np.concatenate([
+                np.zeros(head_pad, dtype=samples.dtype),
+                samples,
+                np.zeros(tail_pad, dtype=samples.dtype),
+            ])
 
             duration_ms = (len(samples) / sample_rate) * 1000
 

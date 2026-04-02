@@ -47,16 +47,55 @@ class AudioPlayer:
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
 
+    _available_devices_cache: list[str] | None = None
+    _available_devices_ts: float = 0.0
+    _DEVICE_CACHE_TTL: float = 10.0  # seconds
+
+    def _get_available_devices(self) -> list[str]:
+        """Return list of available mpv audio device IDs, cached briefly."""
+        now = time.time()
+        if (
+            self._available_devices_cache is not None
+            and now - self._available_devices_ts < self._DEVICE_CACHE_TTL
+        ):
+            return self._available_devices_cache
+
+        try:
+            result = subprocess.run(
+                ["mpv", "--audio-device=help"],
+                capture_output=True, text=True, timeout=5,
+            )
+            devices = []
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("'") and "'" in line[1:]:
+                    dev_id = line[1:line.index("'", 1)]
+                    devices.append(dev_id)
+            self._available_devices_cache = devices
+            self._available_devices_ts = now
+            return devices
+        except Exception as e:
+            logger.warning(f"Failed to query audio devices: {e}")
+            return []
+
     def _build_command(self, path: str) -> list[str]:
         """Build the player command list for the given audio file path.
 
         Re-reads audio_output_device from config on each call so device
         changes take effect immediately without restarting the server.
+        Falls back to system default if the configured device is unavailable.
         """
         if self._player_command == "mpv":
             cmd = ["mpv", "--no-terminal", "--no-video"]
             # Check live config for device (picks up menu bar changes)
             device = self._get_live_output_device()
+            if device:
+                available = self._get_available_devices()
+                if available and device not in available:
+                    logger.warning(
+                        f"Audio device '{device}' not available, falling back to system default"
+                    )
+                    device = None
             if device:
                 cmd.extend([f"--audio-device={device}"])
             cmd.append(path)
