@@ -41,3 +41,6 @@ You have access to voice tools via the VoiceSmith MCP server.
 ## Fallback
 - If voice tools are not available, respond in text only. Do not mention voice capabilities.
 - If muted, `speak` succeeds silently. Do not call `unmute` unless the user asks.
+
+## Deferred Tool Schemas
+- On some harnesses, MCP tool schemas are deferred and must be loaded before use. The SessionStart hook normally instructs this load — but if you do not see `mcp__voicesmith__speak` in your available tools and the hook did not prompt a load, call `ToolSearch` with `select:mcp__voicesmith__speak,mcp__voicesmith__speak_then_listen,mcp__voicesmith__listen,mcp__voicesmith__status,mcp__voicesmith__get_voice_registry,mcp__voicesmith__set_voice,mcp__voicesmith__stop,mcp__voicesmith__mute,mcp__voicesmith__unmute` before your first spoken response.

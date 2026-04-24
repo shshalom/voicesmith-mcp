@@ -126,7 +126,7 @@ if [ -n "$SESSION_NAME" ]; then
 {
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
-    "additionalContext": "Your assigned voice for this session is: ${SESSION_NAME} (voice: ${SESSION_VOICE}). Use name: \"${SESSION_NAME}\" for all speak calls."
+    "additionalContext": "Your assigned voice for this session is: ${SESSION_NAME} (voice: ${SESSION_VOICE}). Use name: \"${SESSION_NAME}\" for all speak calls.\n\nIMPORTANT: The voicesmith MCP tools are deferred — their schemas are not loaded by default. Before your first response, call ToolSearch with query \"select:mcp__voicesmith__speak,mcp__voicesmith__speak_then_listen,mcp__voicesmith__listen,mcp__voicesmith__status,mcp__voicesmith__get_voice_registry,mcp__voicesmith__set_voice,mcp__voicesmith__stop,mcp__voicesmith__mute,mcp__voicesmith__unmute\" to load them. Then follow the voice rules (speak openings when meaningful, always speak closings with block=true, use speak_then_listen for questions)."
   }
 }
 EOF
