@@ -72,7 +72,7 @@ if $UNINSTALL; then
         ok "Removed $INSTALL_DIR"
     fi
 
-    # Remove MCP config entries
+    # Remove MCP config entries (JSON-based: Claude, Cursor, legacy Codex mcp.json)
     for config in "$HOME/.claude.json" "$HOME/.cursor/mcp.json" "$HOME/.codex/mcp.json"; do
         if [ -f "$config" ]; then
             python3 -c "
@@ -91,6 +91,26 @@ except:
 " 2>/dev/null && ok "Removed MCP entry from $(basename "$config")" || true
         fi
     done
+
+    # Remove [mcp_servers.voicesmith] from Codex config.toml
+    CODEX_TOML="$HOME/.codex/config.toml"
+    if [ -f "$CODEX_TOML" ] && grep -q "mcp_servers.voicesmith" "$CODEX_TOML" 2>/dev/null; then
+        python3 - "$CODEX_TOML" << 'PYEOF' 2>/dev/null && ok "Removed MCP entry from config.toml" || true
+import re, sys
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+pattern = re.compile(
+    r'(?ms)^\[mcp_servers\.voicesmith(?:\.[^\]]+)?\][^\n]*\n'
+    r'(?:(?!^\[)[^\n]*\n?)*'
+)
+new_text, n = pattern.subn('', text)
+if n:
+    with open(path, 'w') as f:
+        f.write(new_text)
+    print('removed')
+PYEOF
+    fi
 
     # Remove voice rules from IDE configs
     for rulefile in "$HOME/.claude/CLAUDE.md" "$HOME/.cursor/rules/voicesmith.mdc" "$HOME/.codex/AGENTS.md"; do
@@ -631,13 +651,82 @@ MCPEOF
     ok "$ide_name: configured in $config_path"
 }
 
+# Codex reads MCP servers from ~/.codex/config.toml under [mcp_servers.<name>],
+# not from a separate mcp.json. Edit the TOML in place, preserving everything else.
+configure_mcp_codex() {
+    local config_path="$HOME/.codex/config.toml"
+    mkdir -p "$(dirname "$config_path")"
+    [ -f "$config_path" ] || touch "$config_path"
+
+    "$VENV_DIR/bin/python3" - "$config_path" "$MCP_COMMAND" "$MCP_ARGS_JSON" << 'PYEOF'
+import json, re, sys
+
+path, command, args_json = sys.argv[1], sys.argv[2], sys.argv[3]
+args = json.loads(args_json)
+
+with open(path) as f:
+    text = f.read()
+
+# Build the new block. TOML strings: use double quotes and escape backslashes/quotes.
+def toml_str(s):
+    return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+args_toml = '[' + ', '.join(toml_str(a) for a in args) + ']'
+block = (
+    '[mcp_servers.voicesmith]\n'
+    f'command = {toml_str(command)}\n'
+    f'args = {args_toml}\n'
+    '\n'
+    '[mcp_servers.voicesmith.tools.speak]\n'
+    'approval_mode = "approve"\n'
+)
+
+# Strip any existing [mcp_servers.voicesmith] block plus any [mcp_servers.voicesmith.*]
+# subtables (until next non-matching [section] header or EOF).
+pattern = re.compile(
+    r'(?ms)^\[mcp_servers\.voicesmith(?:\.[^\]]+)?\][^\n]*\n'
+    r'(?:(?!^\[)[^\n]*\n?)*'
+)
+new_text, n = pattern.subn('', text)
+if not new_text.endswith('\n') and new_text:
+    new_text += '\n'
+if new_text and not new_text.endswith('\n\n'):
+    new_text += '\n'
+new_text += block
+
+with open(path, 'w') as f:
+    f.write(new_text)
+
+print('updated' if n else 'added')
+PYEOF
+    ok "Codex: configured in $config_path"
+}
+
 for ide in "${TARGET_IDES[@]}"; do
     case "$ide" in
         claude) configure_mcp "$HOME/.claude.json" "Claude Code" ;;
         cursor) configure_mcp "$HOME/.cursor/mcp.json" "Cursor" ;;
-        codex)  configure_mcp "$HOME/.codex/mcp.json" "Codex" ;;
+        codex)  configure_mcp_codex ;;
     esac
 done
+
+# Clean up legacy ~/.codex/mcp.json (Codex never read this file).
+LEGACY_CODEX_MCP="$HOME/.codex/mcp.json"
+if [ -f "$LEGACY_CODEX_MCP" ] && grep -q "voicesmith" "$LEGACY_CODEX_MCP" 2>/dev/null; then
+    "$VENV_DIR/bin/python3" -c "
+import json, os
+with open('$LEGACY_CODEX_MCP') as f:
+    data = json.load(f)
+if 'mcpServers' in data and 'voicesmith' in data['mcpServers']:
+    del data['mcpServers']['voicesmith']
+    if not data['mcpServers']:
+        os.unlink('$LEGACY_CODEX_MCP')
+    else:
+        with open('$LEGACY_CODEX_MCP', 'w') as f:
+            json.dump(data, f, indent=2)
+" 2>/dev/null
+    info "Cleaned up legacy ~/.codex/mcp.json"
+fi
 
 # Clean up legacy ~/.claude/mcp.json
 LEGACY_MCP="$HOME/.claude/mcp.json"
