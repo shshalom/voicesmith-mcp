@@ -149,6 +149,33 @@ The AI should inform the user and show available voices via `get_voice_registry`
 
 **Text handling:** Plain text only — no SSML or markup supported. For long text (>500 characters), the server **auto-chunks** by sentence (splits on `.` `!` `?`), synthesizes each chunk, and plays them sequentially with no gap. No hard rejection or length limit — just auto-chunking. This also enables future streaming playback (play chunk 1 while synthesizing chunk 2).
 
+#### `export_speech`
+
+Synthesize speech and save it to an audio file. Same synthesis path as `speak`, but the result is written to disk instead of played — useful for building videos and screencasts, archiving narration, or batch TTS.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `name` | string | Yes | Agent/voice name (e.g., "George", "Nova"). Maps to a voice via the registry, with the same auto-assign behavior as `speak`. |
+| `text` | string | Yes | The text to synthesize. |
+| `output_path` | string | Yes | Where to write the audio file. The extension sets the format (`.wav` recommended; other `soundfile`-supported formats like `.flac` also work). `~` is expanded and missing parent directories are created. |
+| `speed` | number | No | Speech speed multiplier. Default: 1.0 |
+
+**Returns:**
+```json
+{
+  "success": true,
+  "voice": "bm_george",
+  "auto_assigned": false,
+  "path": "/Users/me/clips/intro.wav",
+  "duration_ms": 3002.0,
+  "synthesis_ms": 1287.2,
+  "sample_rate": 24000
+}
+```
+
+Synthesis runs off the event loop (via a worker thread), so concurrent sessions are not blocked. On failure (engine not loaded, synthesis error, unwritable path) it returns `{"success": false, "error": "tts_unavailable" | "export_failed", "message": "..."}`. Unlike `speak`, it does not play audio and is unaffected by mute.
+
 #### `list_voices`
 
 List all available Kokoro voices.

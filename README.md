@@ -133,6 +133,7 @@ Once installed, your AI assistant has access to these tools:
 | Tool | Description |
 |------|-------------|
 | `speak` | Synthesize and play speech for a named agent |
+| `export_speech` | Synthesize speech and save it to an audio file (no playback) |
 | `listen` | Open the mic, record speech, return transcribed text |
 | `speak_then_listen` | Speak a question, then immediately listen for the answer |
 | `set_voice` | Change the voice for an agent name |
