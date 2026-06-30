@@ -19,6 +19,7 @@ from shared import (
     STT_SAMPLE_RATE,
     ALL_VOICE_IDS,
     VOICE_METADATA,
+    TTSEngineError,
 )
 from voice_registry import VoiceRegistry
 
@@ -159,6 +160,91 @@ class TestSpeakTool:
 
         result2 = await server.speak("Eric", "Hello again", block=True)
         assert result2["auto_assigned"] is False  # Second call uses existing
+
+
+# ─── Export Speech Tool Tests ─────────────────────────────────────────────────
+
+
+class TestExportSpeechTool:
+    @pytest.mark.asyncio
+    async def test_export_writes_file_and_returns_metadata(self, tmp_path):
+        engine, player, queue = _mock_tts()
+        engine.synthesize.return_value = SynthesisResult(
+            samples=np.zeros(24000, dtype=np.float32),
+            sample_rate=24000,
+            duration_ms=1000.0,
+            synthesis_ms=100.0,
+        )
+        _setup_server_globals(tts_engine=engine, audio_player=player, speech_queue=queue)
+
+        import server
+        out = tmp_path / "clip.wav"
+        with patch("soundfile.write") as mock_write:
+            result = await server.export_speech("Eric", "Hello world", str(out))
+
+        assert result["success"] is True
+        assert result["voice"] == "am_eric"
+        assert result["path"] == str(out)
+        assert result["duration_ms"] == 1000.0
+        assert result["sample_rate"] == 24000
+        # The synthesized samples are written to the requested path
+        mock_write.assert_called_once()
+        assert mock_write.call_args[0][0] == str(out)
+        engine.synthesize.assert_called_once_with("Hello world", "am_eric", 1.0)
+
+    @pytest.mark.asyncio
+    async def test_export_creates_parent_dirs(self, tmp_path):
+        engine, player, queue = _mock_tts()
+        engine.synthesize.return_value = SynthesisResult(
+            samples=np.zeros(10, dtype=np.float32),
+            sample_rate=24000, duration_ms=1.0, synthesis_ms=1.0,
+        )
+        _setup_server_globals(tts_engine=engine, audio_player=player, speech_queue=queue)
+
+        import server
+        nested = tmp_path / "a" / "b" / "clip.wav"
+        with patch("soundfile.write"):
+            result = await server.export_speech("Eric", "Hi", str(nested))
+
+        assert result["success"] is True
+        assert nested.parent.is_dir()
+
+    @pytest.mark.asyncio
+    async def test_export_passes_speed_to_engine(self, tmp_path):
+        engine, player, queue = _mock_tts()
+        engine.synthesize.return_value = SynthesisResult(
+            samples=np.zeros(10, dtype=np.float32),
+            sample_rate=24000, duration_ms=1.0, synthesis_ms=1.0,
+        )
+        _setup_server_globals(tts_engine=engine, audio_player=player, speech_queue=queue)
+
+        import server
+        with patch("soundfile.write"):
+            await server.export_speech("Eric", "Fast", str(tmp_path / "c.wav"), speed=1.5)
+        engine.synthesize.assert_called_once_with("Fast", "am_eric", 1.5)
+
+    @pytest.mark.asyncio
+    async def test_export_when_tts_unavailable(self):
+        _setup_server_globals()
+
+        import server
+        result = await server.export_speech("Eric", "Hello", "/tmp/x.wav")
+
+        assert result["success"] is False
+        assert result["error"] == "tts_unavailable"
+
+    @pytest.mark.asyncio
+    async def test_export_reports_synthesis_failure(self, tmp_path):
+        engine, player, queue = _mock_tts()
+        engine.synthesize.side_effect = TTSEngineError("boom")
+        _setup_server_globals(tts_engine=engine, audio_player=player, speech_queue=queue)
+
+        import server
+        result = await server.export_speech("Eric", "Hello", str(tmp_path / "c.wav"))
+
+        assert result["success"] is False
+        assert result["error"] == "export_failed"
+        assert "boom" in result["message"]
 
 
 # ─── Listen Tool Tests ────────────────────────────────────────────────────────

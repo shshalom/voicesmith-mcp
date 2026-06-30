@@ -2,6 +2,11 @@
 
 All notable changes to VoiceSmith MCP are documented here.
 
+## [Unreleased]
+
+### Added
+- **`export_speech` tool:** Synthesize speech and write it to an audio file (e.g. WAV) instead of playing it. Same name/voice resolution and `speed` as `speak`; returns the output path, `duration_ms`, `synthesis_ms`, and `sample_rate`. Useful for building videos and screencasts, archiving narration, or batch TTS. Creates parent directories if missing.
+
 ## [1.0.18] - 2026-03-05
 
 ### Added

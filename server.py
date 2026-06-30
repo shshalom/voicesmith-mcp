@@ -713,6 +713,55 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
 
 
 @mcp.tool()
+async def export_speech(name: str, text: str, output_path: str, speed: float = 1.0) -> dict:
+    """Synthesize speech and save it to an audio file (no playback).
+
+    Like `speak`, but instead of playing audio it renders the synthesized
+    samples to a file and returns the path plus timing. Useful for building
+    videos and screencasts, archiving narration, or batch TTS.
+
+    Args:
+        name: Agent/voice name (e.g., "George", "Nova"). Maps to a voice via the registry.
+        text: The text to synthesize.
+        output_path: Where to write the audio file. The extension sets the format
+            (".wav" recommended; other soundfile formats like .flac also work).
+            Parent directories are created if missing.
+        speed: Speech speed multiplier (default 1.0).
+    """
+    _capture_event_loop()
+
+    if _tts_engine is None:
+        return {"success": False, "error": "tts_unavailable", "message": "TTS engine not loaded"}
+
+    voice_id, auto_assigned = _registry.get_voice(name)
+
+    try:
+        out = Path(output_path).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        def _render():
+            import soundfile as sf
+            res = _tts_engine.synthesize(text, voice_id, speed)
+            sf.write(str(out), res.samples, res.sample_rate)
+            return res
+
+        result = await asyncio.to_thread(_render)
+    except Exception as e:
+        logger.error(f"export_speech failed: {e}")
+        return {"success": False, "error": "export_failed", "message": str(e)}
+
+    return {
+        "success": True,
+        "voice": voice_id,
+        "auto_assigned": auto_assigned,
+        "path": str(out),
+        "duration_ms": round(result.duration_ms, 1),
+        "synthesis_ms": round(result.synthesis_ms, 1),
+        "sample_rate": result.sample_rate,
+    }
+
+
+@mcp.tool()
 async def _transcribe_audio(audio) -> dict:
     """Transcribe provided audio data using faster-whisper (no mic)."""
     try:
