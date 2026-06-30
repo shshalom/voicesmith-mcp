@@ -1345,7 +1345,7 @@ def main():
     # Register shutdown handlers
     def handle_signal(signum, frame):
         _shutdown()
-        sys.exit(0)
+        os._exit(0)  # bypass Py_FinalizeEx to avoid SIGABRT from native thread pools
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
@@ -1450,3 +1450,5 @@ def _start_periodic_save_thread():
 
 if __name__ == "__main__":
     main()
+    _shutdown()
+    os._exit(0)  # stdin-EOF path: bypass Py_FinalizeEx same as signal handler
