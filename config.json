@@ -25,6 +25,10 @@
     "enabled": true,
     "floor_wait": 20.0
   },
+  "engine": {
+    "enabled": true,
+    "idle_exit_min": 30
+  },
   "wake_word": {
     "enabled": false,
     "model": "hey_listen",

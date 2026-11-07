@@ -347,6 +347,26 @@ Waiters poll the lock non-blockingly every 50 ms (async sleep — the event loop
 
 Properties: crash-safe (the kernel releases `flock` when a holder dies — no stale locks, no cleanup daemons), reentrant per task/thread (inner `speak`/`listen` calls inside `speak_then_listen` share the outer hold), and cancellation-safe (a cancelled wait never leaves a held-but-forgotten lock). Holder identity comes from an advisory sidecar (`/tmp/voicesmith-floor.json`); `holder_info()` probes the lock itself, so sidecars left by crashed holders are detected as stale and ignored. Set `coordination.enabled: false` in `config.json` to disable (legacy overlapping behavior). The `status` tool and HTTP `/status` report the current holder under `floor`.
 
+#### Engine Service (Shared Model Host)
+
+Every MCP session is a separate process, and each one used to load its own copy of the Kokoro ONNX and faster-whisper/CTranslate2 stacks (~1.5 GB per session — 1.4–1.8 GB measured with whisper-medium). With many agent threads that is tens of GB.
+
+The **engine service** (`engine_service.py`) is a single daemon that hosts those models ONCE. Session servers use thin proxies (`engine_client.py`: `RemoteTTSEngine`, `RemoteSTTEngine`) that forward synthesize/transcribe over `/tmp/voicesmith-engine.sock` with a framed request protocol:
+
+```
+[4-byte BE json_len][json header ("op", "payload_len", ...)][payload bytes]
+```
+
+Ops: `synthesize` (text/voice/speed → float32 PCM + timings), `transcribe` (float32 PCM + sample_rate → text/confidence), `status`, `shutdown`. The proxies expose the same interface as the local engines, so SpeechQueue, `listen`, `speak_then_listen`, wake, and `export_speech` work unchanged. VAD stays in-session (2 MB).
+
+Lifecycle:
+- Spawned on demand by the first client request; a flock guard (`/tmp/voicesmith-engine.lock`, held for the daemon's lifetime) makes concurrent spawns harmless — exactly one survives.
+- Exits after `engine.idle_exit_min` idle minutes (default 30; `0` = stay resident). The next request respawns it (cold start ≈ 5–15 s).
+- Watches `config.json` and hot-reloads the STT model when its size changes (menu bar model switching works without killing sessions).
+- Crash-safe: a dead daemon surfaces as a clean `TTSEngineError`/`STTEngineError` on the next request, which respawns it. Logs to `~/.local/share/voicesmith-mcp/engine.log`.
+
+Measured: daemon ≈ 1.2 GB (both models), thin client ≈ 17 MB. `engine.enabled: false` in `config.json` restores the legacy in-process model loading. The `status` tool and HTTP `/status` report daemon state under `engine_service`.
+
 ### Diagnostic Tools
 
 #### `status`
@@ -656,6 +676,10 @@ The `config.json` in the project repo root is the **default template** copied du
   "coordination": {
     "enabled": true,
     "floor_wait": 20.0
+  },
+  "engine": {
+    "enabled": true,
+    "idle_exit_min": 30
   }
 }
 ```
@@ -673,6 +697,8 @@ The `duck_media` field enables automatic media ducking during TTS playback. When
 The `nudge_on_timeout` field controls whether `speak_then_listen` speaks a verbal nudge ("I didn't catch that. Go ahead and type it.") when the user doesn't respond within the timeout. Default: `false` (silent fallback to text).
 
 The `coordination` section controls the voice floor (multi-session audio arbitration, described under **Multi-Session Coordination** above). `enabled` defaults to `true`; `floor_wait` (seconds, default 20) is how long a speak/listen call waits for another session to finish before returning `floor_busy`.
+
+The `engine` section controls the shared model host (described under **Engine Service** above). `enabled: true` (default) makes every session a thin client of the engine service daemon — one shared copy of the TTS/STT models instead of ~1.5 GB per session. `idle_exit_min` (default 30) shuts the daemon down after that many idle minutes, freeing its ~1.2 GB until the next request respawns it; `0` keeps it resident.
 
 ### Environment Variables
 

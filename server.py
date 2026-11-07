@@ -94,9 +94,20 @@ def _init_tts(config: AppConfig):
     """Initialize TTS engine, audio player, and speech queue."""
     global _tts_engine, _audio_player, _speech_queue
 
-    from tts.kokoro_engine import KokoroEngine
     from tts.audio_player import AudioPlayer
     from tts.speech_queue import SpeechQueue
+
+    if config.engine.enabled:
+        # Remote mode: models live in the shared engine service (one copy
+        # for all sessions instead of ~1.5 GB per session).
+        from engine_client import RemoteTTSEngine
+        _tts_engine = RemoteTTSEngine()
+        _audio_player = AudioPlayer(config.tts.audio_player, config.tts.audio_output_device)
+        _speech_queue = SpeechQueue(_tts_engine, _audio_player, duck_media=config.tts.duck_media)
+        logger.info("TTS subsystem initialized (remote engine service)")
+        return
+
+    from tts.kokoro_engine import KokoroEngine
 
     try:
         _tts_engine = KokoroEngine(config.tts.model_path, config.tts.voices_path)
@@ -117,7 +128,11 @@ def _init_stt(config: AppConfig):
     from stt.mic_capture import MicCapture
 
     try:
-        _stt_engine = WhisperEngine(config.stt.model_size, config.stt.language)
+        if config.engine.enabled:
+            from engine_client import RemoteSTTEngine
+            _stt_engine = RemoteSTTEngine()
+        else:
+            _stt_engine = WhisperEngine(config.stt.model_size, config.stt.language)
     except STTEngineError as e:
         logger.error(f"STT initialization failed: {e}")
         _stt_engine = None
@@ -130,7 +145,8 @@ def _init_stt(config: AppConfig):
 
     if _stt_engine is not None:
         _mic_capture = MicCapture(STT_SAMPLE_RATE, config.stt.audio_input_device)
-        logger.info("STT subsystem initialized")
+        logger.info("STT subsystem initialized"
+                    + (" (remote engine service)" if config.engine.enabled else ""))
 
 
 def _init_registry(config: AppConfig):
@@ -256,6 +272,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "queue_depth": _speech_queue.depth if _speech_queue else 0,
             "registry_size": _registry.size if _registry else 0,
             "floor": _floor_status(),
+            "engine_service": _engine_service_status(),
         }
         self._json_response(200, data)
 
@@ -696,6 +713,17 @@ def _floor_status() -> dict:
     if holder is None:
         return {"held": False}
     return {"held": True, **holder}
+
+
+def _engine_service_status() -> dict:
+    """Report shared engine service state (never spawns it)."""
+    if _config is None or not getattr(_config.engine, "enabled", False):
+        return {"enabled": False}
+    try:
+        from engine_client import service_status
+        return {"enabled": True, **service_status()}
+    except Exception:
+        return {"enabled": True, "running": False}
 
 
 # ─── MCP Tools ────────────────────────────────────────────────────────────────
@@ -1356,6 +1384,7 @@ async def status() -> dict:
         "queue_depth": _speech_queue.depth if _speech_queue else 0,
         "session": _session_info,
         "floor": _floor_status(),
+        "engine_service": _engine_service_status(),
         "wake_word": {
             "enabled": _config.wake_word.enabled if _config else False,
             "listening": _wake_listener.is_listening if _wake_listener else False,
