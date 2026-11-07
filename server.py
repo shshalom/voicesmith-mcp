@@ -250,6 +250,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "port": _session_info.get("port") if _session_info else None,
             "pid": _session_info.get("pid") if _session_info else None,
             "session_id": _session_info.get("session_id") if _session_info else None,
+            "t3_thread_id": _session_info.get("t3_thread_id") if _session_info else None,
             "tmux_session": _session_info.get("tmux_session") if _session_info else None,
             "started_at": _session_info.get("started_at") if _session_info else None,
             "mcp_connected": _event_loop is not None,
