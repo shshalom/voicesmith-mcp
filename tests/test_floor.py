@@ -1,6 +1,8 @@
 """Tests for the cross-process voice floor (speaker + mic arbitration)."""
 
 import asyncio
+import json
+import os
 import sys
 import threading
 import time
@@ -193,6 +195,66 @@ class TestAsyncAcquire:
         assert order in (["A-start", "A-end", "B-start", "B-end"],
                          ["B-start", "B-end", "A-start", "A-end"])
         assert floor.holder_info() is None
+
+
+# ─── Sidecar phase refresh + thread identity ──────────────────────────────────
+
+
+class TestSidecarIdentity:
+    @pytest.mark.asyncio
+    async def test_reentrant_acquire_refreshes_purpose(self, tmp_path):
+        """speak_then_listen must surface its live phase (speak → listen)."""
+        floor = make_floor(tmp_path)
+        await floor.acquire("speak_then_listen", "Eric")
+        acquired_at = floor.holder_info()["acquired_at"]
+
+        await floor.acquire("speak", "Eric")  # inner speak phase
+        assert floor.holder_info()["purpose"] == "speak"
+        assert floor.holder_info()["acquired_at"] == acquired_at  # age stays honest
+
+        floor.release()  # speak phase done, outer hold continues
+        await floor.acquire("listen", "Eric")  # inner listen phase
+        assert floor.holder_info()["purpose"] == "listen"
+
+        floor.release()
+        floor.release()
+        assert floor.holder_info() is None
+
+    @pytest.mark.asyncio
+    async def test_default_extra_stamped_into_sidecar(self, tmp_path):
+        """Thread identity set once on the floor shows in every hold."""
+        floor = make_floor(tmp_path)
+        floor.set_default_extra({"thread_id": "t3-abc-123"})
+
+        await floor.acquire("speak", "Eric")
+        assert floor.holder_info()["thread_id"] == "t3-abc-123"
+        floor.release()
+        assert floor.holder_info() is None
+
+    def test_set_session_thread_id(self, tmp_path, monkeypatch):
+        import session_registry as sr
+
+        monkeypatch.setattr(sr, "_sessions_path", lambda: tmp_path / "sessions.json")
+        (tmp_path / "sessions.json").write_text(json.dumps(
+            {"sessions": [{"name": "Eric", "pid": os.getpid(), "voice": "am_eric"}]}
+        ))
+
+        updated = sr.set_session_thread_id(os.getpid(), "thread-xyz")
+        assert updated is not None
+        assert updated["t3_thread_id"] == "thread-xyz"
+        assert updated["name"] == "Eric"
+
+        # Persisted for other processes (companions) to read
+        data = json.loads((tmp_path / "sessions.json").read_text())
+        assert data["sessions"][0]["t3_thread_id"] == "thread-xyz"
+
+    def test_set_session_thread_id_unknown_pid(self, tmp_path, monkeypatch):
+        import session_registry as sr
+
+        monkeypatch.setattr(sr, "_sessions_path", lambda: tmp_path / "sessions.json")
+        (tmp_path / "sessions.json").write_text(json.dumps({"sessions": []}))
+
+        assert sr.set_session_thread_id(999999, "x") is None
 
 
 # ─── Server integration tests ─────────────────────────────────────────────────

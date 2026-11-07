@@ -380,6 +380,36 @@ def update_session_id(pid: int, session_id: str) -> Optional[dict]:
         return None
 
 
+def set_session_thread_id(pid: int, thread_id: str) -> Optional[dict]:
+    """Attach a T3 Code thread id to a session's registry entry.
+
+    The T3 harness injects T3CODE_THREAD_ID into every MCP server process
+    it spawns; the server stamps it here at startup so hardware companions
+    can map a VoiceSmith session (and the voice floor holder) to its
+    conversation.
+
+    Returns the updated session dict, or None if the PID isn't registered.
+    """
+    path = _sessions_path()
+    if not path.exists():
+        return None
+
+    try:
+        with open(path, "r+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            sessions = _read_sessions(path)
+
+            for s in sessions:
+                if s.get("pid") == pid:
+                    s["t3_thread_id"] = thread_id
+                    _write_sessions(path, sessions)
+                    return dict(s)
+            return None
+    except OSError as e:
+        logger.warning(f"Failed to set t3_thread_id: {e}")
+        return None
+
+
 def get_active_sessions() -> list[dict]:
     """Return list of active sessions (stale PIDs filtered out)."""
     path = _sessions_path()

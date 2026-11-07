@@ -1516,9 +1516,22 @@ def main():
         base_port=_config.http_port,
     )
 
+    # Attach this session to its T3 Code thread (injected by the harness
+    # into every MCP server process it spawns). Lets hardware companions
+    # map the voice floor holder back to the conversation that's talking
+    # or listening.
+    t3_thread_id = os.environ.get("T3CODE_THREAD_ID")
+    if t3_thread_id:
+        from session_registry import set_session_thread_id
+        updated = set_session_thread_id(os.getpid(), t3_thread_id)
+        if updated:
+            _session_info = updated
+            logger.info(f"Session linked to T3 thread {t3_thread_id}")
+
     # Cross-session voice floor (speaker + mic arbitration)
     if _config.coordination.enabled:
         _voice_floor = get_default_floor()
+        _voice_floor.set_default_extra({"thread_id": t3_thread_id} if t3_thread_id else {})
         logger.info(
             f"Voice floor enabled (wait up to {_config.coordination.floor_wait}s "
             f"for other sessions' audio)"

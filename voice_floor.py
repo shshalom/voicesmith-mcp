@@ -67,10 +67,22 @@ class VoiceFloor:
     def __init__(self, lock_path: str = FLOOR_LOCK_PATH, info_path: str = FLOOR_INFO_PATH):
         self._lock_path = lock_path
         self._info_path = info_path
-        self._state_lock = threading.Lock()
+        self._state_lock = threading.RLock()  # RLock: _write_holder runs inside acquire paths
         self._fd: Optional[int] = None
         self._owner = None
         self._depth = 0
+        self._acquired_at: Optional[float] = None
+        self._default_extra: dict = {}
+
+    def set_default_extra(self, extra: dict) -> None:
+        """Set keys merged into every sidecar write (e.g. thread identity).
+
+        Used by the server to stamp the session's T3 thread id onto the
+        holder info so hardware companions can map the floor holder to a
+        conversation.
+        """
+        with self._state_lock:
+            self._default_extra = dict(extra or {})
 
     # ─── Acquisition ────────────────────────────────────────────────────────
 
@@ -89,6 +101,9 @@ class VoiceFloor:
         with self._state_lock:
             if self._fd is not None and self._owner is key:
                 self._depth += 1
+                # Re-entrant acquire: refresh the sidecar so watchers see
+                # phase changes (speak_then_listen → speak → listen).
+                self._write_holder(purpose, session_name)
                 return
 
         fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o644)
@@ -112,6 +127,7 @@ class VoiceFloor:
                     self._fd = fd
                     self._owner = key
                     self._depth = 1
+                    self._acquired_at = round(time.time(), 3)
                 fd = None
                 self._write_holder(purpose, session_name)
                 return
@@ -133,6 +149,8 @@ class VoiceFloor:
         with self._state_lock:
             if self._fd is not None and self._owner is key:
                 self._depth += 1
+                # Re-entrant acquire: refresh the sidecar (phase change).
+                self._write_holder(purpose, session_name)
                 return
 
         fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o644)
@@ -154,6 +172,7 @@ class VoiceFloor:
                     self._fd = fd
                     self._owner = key
                     self._depth = 1
+                    self._acquired_at = round(time.time(), 3)
                 fd = None
                 self._write_holder(purpose, session_name)
                 return
@@ -178,6 +197,7 @@ class VoiceFloor:
             self._fd = None
             self._owner = None
             self._depth = 0
+            self._acquired_at = None
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
         except OSError as e:
@@ -223,12 +243,16 @@ class VoiceFloor:
     # ─── Sidecar (advisory holder info) ─────────────────────────────────────
 
     def _write_holder(self, purpose: str, session_name: str) -> None:
-        info = {
-            "pid": os.getpid(),
-            "name": session_name or None,
-            "purpose": purpose,
-            "acquired_at": round(time.time(), 3),
-        }
+        with self._state_lock:
+            info = {
+                "pid": os.getpid(),
+                "name": session_name or None,
+                "purpose": purpose,
+                # Keep the original acquire time on phase refreshes so
+                # held-for ages stay honest across speak_then_listen.
+                "acquired_at": self._acquired_at if self._acquired_at is not None else round(time.time(), 3),
+            }
+            info.update(self._default_extra)
         try:
             tmp = self._info_path + ".tmp"
             with open(tmp, "w") as f:
