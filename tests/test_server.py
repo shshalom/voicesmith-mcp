@@ -550,3 +550,62 @@ class TestGracefulDegradation:
         import server
         result = await server.listen(timeout=5)
         assert result["success"] is True
+
+
+class TestShutdownHardening:
+    """Orphan/crash hardening: idempotent shutdown, temp sweep, parent watchdog."""
+
+    def test_shutdown_runs_once(self):
+        import server
+
+        queue = MagicMock()
+        _setup_server_globals(speech_queue=queue)
+        server._shutdown_done = False
+        with patch("server.unregister_session") as unreg:
+            server._shutdown()
+            server._shutdown()
+        queue.stop.assert_called_once()
+        unreg.assert_called_once()
+        server._shutdown_done = False
+
+    def test_sweep_removes_only_stale_temps(self, tmp_path):
+        import os
+        import time
+        import server
+
+        stale = tmp_path / ".config-old.tmp"
+        fresh = tmp_path / ".config-new.tmp"
+        other = tmp_path / "config.json"
+        for f in (stale, fresh, other):
+            f.write_text("")
+        old = time.time() - server.STALE_TEMP_AGE - 60
+        os.utime(stale, (old, old))
+        os.utime(other, (old, old))
+
+        server._sweep_stale_config_temps(tmp_path)
+
+        assert not stale.exists()
+        assert fresh.exists()  # may be another session's in-flight write
+        assert other.exists()
+
+    def test_watchdog_exits_when_reparented(self):
+        import server
+
+        ppids = iter([4242, 4242, 1])
+        with patch("server.os.getppid", side_effect=lambda: next(ppids)), \
+             patch("server.time.sleep"), \
+             patch("server._exit_process", side_effect=SystemExit) as exit_mock, \
+             patch("server.threading.Thread") as thread_cls:
+            server._start_parent_watchdog()
+            watch = thread_cls.call_args.kwargs["target"]
+            with pytest.raises(SystemExit):
+                watch()
+        exit_mock.assert_called_once_with(0)
+
+    def test_watchdog_skipped_under_launchd(self):
+        import server
+
+        with patch("server.os.getppid", return_value=1), \
+             patch("server.threading.Thread") as thread_cls:
+            server._start_parent_watchdog()
+        thread_cls.assert_not_called()
