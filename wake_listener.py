@@ -317,12 +317,16 @@ class WakeWordListener:
             return
 
         try:
-            self._record_and_inject()
+            self._record_and_inject(floor)
         finally:
             floor.release()
 
-    def _record_and_inject(self):
-        """Record post-wake speech, transcribe, and inject (floor held)."""
+    def _record_and_inject(self, floor):
+        """Record post-wake speech, transcribe, and inject (floor held).
+
+        Floor phases: "listen" while the mic is actually open,
+        "transcribing" while Whisper runs.
+        """
         import sounddevice as sd
 
         # Flush and wait for audio system to settle
@@ -375,6 +379,9 @@ class WakeWordListener:
             with self._state_lock:
                 self._state = WakeState.LISTENING
             return
+
+        # Mic is live — mark the exact open moment on the floor sidecar.
+        floor.set_phase("listen")
 
         # Reset VAD state
         self._vad.reset()
@@ -436,6 +443,7 @@ class WakeWordListener:
         # Transcribe
         audio = np.concatenate(chunks).flatten()
         logger.info(f"Transcribing {len(audio) / STT_SAMPLE_RATE:.1f}s of audio...")
+        floor.set_phase("transcribing")
 
         try:
             result = self._stt_engine.transcribe(audio, STT_SAMPLE_RATE)

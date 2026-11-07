@@ -14,12 +14,36 @@ logger = get_logger("tts.speech_queue")
 class SpeechQueue:
     """Manages sequential speech synthesis and playback."""
 
-    def __init__(self, engine: KokoroEngine, player: AudioPlayer, duck_media: bool = False) -> None:
+    def __init__(
+        self,
+        engine: KokoroEngine,
+        player: AudioPlayer,
+        duck_media: bool = False,
+        phase_reporter=None,
+    ) -> None:
+        """Args:
+        engine: TTS engine (local KokoroEngine or RemoteTTSEngine).
+        player: AudioPlayer for playback.
+        duck_media: Whether to duck system media during playback.
+        phase_reporter: Optional callable(str) told "synthesizing"/"speak"
+            at the actual synthesis/playback boundaries of each chunk, so
+            watchers (voice floor sidecar → hardware lights) see real
+            audio phases rather than whole-utterance intent.
+        """
         self._engine = engine
         self._player = player
         self._duck_media = duck_media
+        self._phase_reporter = phase_reporter
         self._queue: asyncio.Queue = asyncio.Queue()
         self._speaking = False
+
+    def _report_phase(self, phase: str) -> None:
+        if self._phase_reporter is None:
+            return
+        try:
+            self._phase_reporter(phase)
+        except Exception:
+            pass  # phase reporting is advisory; never break speech
 
     async def speak(
         self,
@@ -70,12 +94,14 @@ class SpeechQueue:
 
             for chunk in chunks:
                 # Run sync synthesis in executor to avoid blocking the event loop
+                self._report_phase("synthesizing")
                 synthesis_result = await loop.run_in_executor(
                     None, self._engine.synthesize, chunk, voice_id, speed
                 )
                 total_synthesis_ms += synthesis_result.synthesis_ms
 
                 # Run sync playback in executor
+                self._report_phase("speak")  # actual audible playback
                 playback_result = await loop.run_in_executor(
                     None,
                     self._player.play,

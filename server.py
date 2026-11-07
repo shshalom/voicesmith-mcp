@@ -103,7 +103,11 @@ def _init_tts(config: AppConfig):
         from engine_client import RemoteTTSEngine
         _tts_engine = RemoteTTSEngine()
         _audio_player = AudioPlayer(config.tts.audio_player, config.tts.audio_output_device)
-        _speech_queue = SpeechQueue(_tts_engine, _audio_player, duck_media=config.tts.duck_media)
+        _speech_queue = SpeechQueue(
+            _tts_engine, _audio_player,
+            duck_media=config.tts.duck_media,
+            phase_reporter=_report_floor_phase,
+        )
         logger.info("TTS subsystem initialized (remote engine service)")
         return
 
@@ -112,7 +116,11 @@ def _init_tts(config: AppConfig):
     try:
         _tts_engine = KokoroEngine(config.tts.model_path, config.tts.voices_path)
         _audio_player = AudioPlayer(config.tts.audio_player, config.tts.audio_output_device)
-        _speech_queue = SpeechQueue(_tts_engine, _audio_player, duck_media=config.tts.duck_media)
+        _speech_queue = SpeechQueue(
+            _tts_engine, _audio_player,
+            duck_media=config.tts.duck_media,
+            phase_reporter=_report_floor_phase,
+        )
         logger.info("TTS subsystem initialized")
     except TTSEngineError as e:
         logger.error(f"TTS initialization failed: {e}")
@@ -726,6 +734,12 @@ def _engine_service_status() -> dict:
         return {"enabled": True, "running": False}
 
 
+def _report_floor_phase(phase: str) -> None:
+    """Bridge SpeechQueue's per-chunk phases to the floor sidecar."""
+    if _voice_floor is not None:
+        _voice_floor.set_phase(phase)
+
+
 # ─── MCP Tools ────────────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -783,10 +797,12 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
         }
 
     # Cross-session floor: serialize against other sessions' speak/listen.
+    # purpose "synthesizing": nothing is audible yet — SpeechQueue refines
+    # to "speak" at actual playback of each chunk.
     if _floor_enabled():
         try:
             await _voice_floor.acquire(
-                "speak", _session_display_name(),
+                "synthesizing", _session_display_name(),
                 wait_timeout=_floor_wait_timeout(20.0),
             )
         except FloorBusyError as e:
@@ -838,7 +854,7 @@ async def _speak_background(text: str, voice_id: str, speed: float) -> None:
     if _floor_enabled():
         try:
             await _voice_floor.acquire(
-                "speak", _session_display_name(),
+                "synthesizing", _session_display_name(),
                 wait_timeout=max(_floor_wait_timeout(20.0), 60.0),
             )
         except FloorBusyError:
@@ -980,10 +996,12 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
 
     # Cross-session floor: don't open the mic while another session is
     # speaking (it would record their TTS as user speech) or listening.
+    # purpose "processing" covers the pre-mic window (wake yield, duck);
+    # it flips to "listen" the moment the mic is actually live.
     if _floor_enabled():
         try:
             await _voice_floor.acquire(
-                "listen", _session_display_name(),
+                "processing", _session_display_name(),
                 wait_timeout=min(_floor_wait_timeout(20.0), timeout + 5.0),
             )
         except FloorBusyError as e:
@@ -1013,7 +1031,15 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
 
         # Play the ready sound AFTER the mic is live (via on_ready callback)
         # so the user doesn't start speaking into a dead mic.
-        ready_cb = _play_ready_sound if prompt != "push-to-talk" else None
+        # The same callback marks the exact mic-open moment on the floor
+        # sidecar ("listen"), for status-light companions.
+        def _on_mic_ready():
+            if _floor_enabled():
+                _voice_floor.set_phase("listen")
+            if prompt != "push-to-talk":
+                _play_ready_sound()
+
+        ready_cb = _on_mic_ready
 
         # Record audio with VAD
         audio = await _mic_capture.record(
@@ -1031,6 +1057,10 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
             return {"success": False, "error": "timeout", "message": "No speech detected within timeout"}
 
         recording_ms = (time.perf_counter() - start) * 1000
+
+        # Mic closed, Whisper about to run — refine the floor phase.
+        if _floor_enabled():
+            _voice_floor.set_phase("transcribing")
 
         # Transcribe
         result = await loop.run_in_executor(
@@ -1599,12 +1629,14 @@ def _start_preheat_intro():
         # busy — an intro is nice-to-have, never worth queueing for.
         if _floor_enabled():
             try:
-                _voice_floor.acquire_sync("speak", intro_name, wait_timeout=2.0)
+                _voice_floor.acquire_sync("synthesizing", intro_name, wait_timeout=2.0)
             except FloorBusyError:
                 logger.info("Skipping preheat intro — voice floor busy")
                 return
         try:
             result = _tts_engine.synthesize(f"{intro_name} here, ready to go.", intro_voice, 1.0)
+            if _floor_enabled():
+                _voice_floor.set_phase("speak")  # actual audible playback
             _audio_player.play(result.samples, result.sample_rate)
             logger.info(f"Preheat intro spoken: {intro_name}")
         except Exception as e:

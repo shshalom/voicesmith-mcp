@@ -15,6 +15,21 @@ Properties:
 - Waiters poll the lock non-blockingly every 50 ms (async sleep, so the
   event loop stays live) and time out with a FloorBusyError that names the
   current holder via a sidecar info file.
+
+Sidecar `purpose` vocabulary (advisory, for status-light companions):
+- "speak"            — audio is playing through the speaker RIGHT NOW
+- "listen"           — microphone is open and recording RIGHT NOW
+- "synthesizing"     — TTS synthesis running, nothing audible yet
+- "transcribing"     — Whisper running on recorded audio, mic closed
+- "processing"       — floor held in transition (setup/teardown windows)
+- "speak_then_listen" — outer hold of a combined ask (inner phases override)
+- "wake"             — post-wake settle window (recording switches to "listen")
+
+Companions should treat only "speak"/"listen" as overlays; everything else
+is normal status. `set_phase()` refines the purpose at actual audio
+boundaries (player start, mic-open callback) without touching the lock.
+The sidecar is advisory: a lone file read cannot prove liveness (crash or
+PID reuse), so consumers must not treat it as lock authority.
 """
 
 import asyncio
@@ -72,6 +87,7 @@ class VoiceFloor:
         self._owner = None
         self._depth = 0
         self._acquired_at: Optional[float] = None
+        self._holder_name: Optional[str] = None
         self._default_extra: dict = {}
 
     def set_default_extra(self, extra: dict) -> None:
@@ -128,6 +144,7 @@ class VoiceFloor:
                     self._owner = key
                     self._depth = 1
                     self._acquired_at = round(time.time(), 3)
+                    self._holder_name = session_name
                 fd = None
                 self._write_holder(purpose, session_name)
                 return
@@ -173,6 +190,7 @@ class VoiceFloor:
                     self._owner = key
                     self._depth = 1
                     self._acquired_at = round(time.time(), 3)
+                    self._holder_name = session_name
                 fd = None
                 self._write_holder(purpose, session_name)
                 return
@@ -198,6 +216,7 @@ class VoiceFloor:
             self._owner = None
             self._depth = 0
             self._acquired_at = None
+            self._holder_name = None
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
         except OSError as e:
@@ -207,6 +226,18 @@ class VoiceFloor:
         except OSError:
             pass
         self._clear_holder()
+
+    def set_phase(self, purpose: str) -> None:
+        """Refine the sidecar purpose to the live audio phase (advisory only).
+
+        Called at real audio boundaries — player start, mic-open callback —
+        without touching the lock, depth, or held-for age. No-op when this
+        instance doesn't currently hold the floor.
+        """
+        with self._state_lock:
+            if self._fd is None:
+                return
+            self._write_holder(purpose, self._holder_name or "")
 
     # ─── Introspection ──────────────────────────────────────────────────────
 

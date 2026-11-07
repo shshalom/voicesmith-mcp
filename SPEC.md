@@ -345,7 +345,21 @@ Waiters poll the lock non-blockingly every 50 ms (async sleep — the event loop
 }
 ```
 
-Properties: crash-safe (the kernel releases `flock` when a holder dies — no stale locks, no cleanup daemons), reentrant per task/thread (inner `speak`/`listen` calls inside `speak_then_listen` share the outer hold), and cancellation-safe (a cancelled wait never leaves a held-but-forgotten lock). Holder identity comes from an advisory sidecar (`/tmp/voicesmith-floor.json`); `holder_info()` probes the lock itself, so sidecars left by crashed holders are detected as stale and ignored. The sidecar's `purpose` reflects the **live phase** — re-entrant acquires refresh it, so a `speak_then_listen` hold reads as `speak` while talking and `listen` while the mic is open. On T3 Code the server stamps `thread_id` (from the harness-injected `T3CODE_THREAD_ID`, also persisted in `sessions.json`) into the sidecar, so hardware companions can map the floor holder to its conversation. Set `coordination.enabled: false` in `config.json` to disable (legacy overlapping behavior). The `status` tool and HTTP `/status` report the current holder under `floor`.
+Properties: crash-safe (the kernel releases `flock` when a holder dies — no stale locks, no cleanup daemons), reentrant per task/thread (inner `speak`/`listen` calls inside `speak_then_listen` share the outer hold), and cancellation-safe (a cancelled wait never leaves a held-but-forgotten lock). Holder identity comes from an advisory sidecar (`/tmp/voicesmith-floor.json`); `holder_info()` probes the lock itself, so sidecars left by crashed holders are detected as stale and ignored. On T3 Code the server stamps `thread_id` (from the harness-injected `T3CODE_THREAD_ID`, also persisted in `sessions.json`) into the sidecar, so hardware companions can map the floor holder to its conversation. Set `coordination.enabled: false` in `config.json` to disable (legacy overlapping behavior). The `status` tool and HTTP `/status` report the current holder under `floor`.
+
+**Sidecar `purpose` vocabulary — live audio phases.** `purpose` reflects what is *actually audible/recorded right now*, not the whole floor hold. Phases are refined at real audio boundaries via `VoiceFloor.set_phase()` (lock/depth untouched):
+
+| value | meaning | when it flips |
+|---|---|---|
+| `speak` | audio playing through the speaker right now | `SpeechQueue` sets it before each chunk's playback (and the preheat intro before its play call) |
+| `listen` | mic open and recording right now | `on_ready` callback from MicCapture (the same moment the ready sound fires); wake recording sets it right after its stream starts |
+| `synthesizing` | TTS synthesis running, nothing audible yet | floor acquire for speak paths, and before each chunk's synthesis |
+| `transcribing` | Whisper running on recorded audio, mic closed | after `record()` returns, before transcription |
+| `processing` | floor held in transition (wake-yield, duck, pre-mic setup) | floor acquire for listen paths |
+| `speak_then_listen` | outer atomic hold of a combined ask (brief pre/post windows only) | `speak_then_listen` acquire; inner phases override immediately |
+| `wake` | post-wake settle window (ready sound) before wake recording opens the mic | `_handle_wake_detected` acquire |
+
+Companions should treat only `speak`/`listen` as overlays; all other values mean "floor held, nothing to hear" (normal status colors). The sidecar disappears on floor release. It is advisory only — a lone file read cannot prove holder liveness (crash or PID reuse); consumers must not treat it as lock authority. Sub-250 ms phases may be missed by polling.
 
 #### Engine Service (Shared Model Host)
 

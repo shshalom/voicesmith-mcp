@@ -257,6 +257,125 @@ class TestSidecarIdentity:
         assert sr.set_session_thread_id(999999, "x") is None
 
 
+# ─── Live audio phases (set_phase) ────────────────────────────────────────────
+
+
+class TestPhaseRefinement:
+    @pytest.mark.asyncio
+    async def test_set_phase_semantics(self, tmp_path):
+        """set_phase refines purpose without touching lock or depth."""
+        floor = make_floor(tmp_path)
+
+        floor.set_phase("listen")  # not holding — no-op, no crash
+        assert floor.holder_info() is None
+
+        await floor.acquire("processing", "Eric")
+        acquired_at = floor.holder_info()["acquired_at"]
+
+        time.sleep(0.02)
+        floor.set_phase("listen")
+        info = floor.holder_info()
+        assert info["purpose"] == "listen"
+        assert info["name"] == "Eric"            # holder identity preserved
+        assert info["acquired_at"] == acquired_at  # held-for age preserved
+
+        floor.release()  # single release frees — set_phase didn't add depth
+        assert floor.holder_info() is None
+
+    @pytest.mark.asyncio
+    async def test_speech_queue_reports_playback_phases(self):
+        """The queue reports synthesizing/speak at real audio boundaries."""
+        from unittest.mock import MagicMock
+        from tts.speech_queue import SpeechQueue
+        from shared import SynthesisResult, PlaybackResult
+        import numpy as np
+
+        engine = MagicMock()
+        engine.synthesize.return_value = SynthesisResult(
+            samples=np.zeros(2400, dtype=np.float32), sample_rate=24000,
+            duration_ms=100.0, synthesis_ms=10.0,
+        )
+        player = MagicMock()
+        player.play.return_value = PlaybackResult(success=True, duration_ms=100.0)
+
+        phases = []
+        queue = SpeechQueue(engine, player, phase_reporter=phases.append)
+
+        result = await queue._speak_blocking("Hello there.", "am_eric", 1.0)
+        assert result.success is True
+        assert phases == ["synthesizing", "speak"]
+
+    @pytest.mark.asyncio
+    async def test_speak_then_listen_phase_sequence(self, tmp_path):
+        """End-to-end: the sidecar reflects actual playback and mic-open.
+
+        purpose must flip at real audio boundaries — synthesizing during
+        TTS, speak during playback, processing during pre-mic setup, listen
+        from mic-open (on_ready), transcribing after the mic closes.
+        """
+        import numpy as np
+        from unittest.mock import MagicMock
+        from tts.speech_queue import SpeechQueue
+        from shared import SynthesisResult, PlaybackResult, TranscriptionResult
+
+        server = _setup_floor_server(tmp_path, tts=True, stt=True)
+
+        class SpyFloor(VoiceFloor):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.purposes = []
+
+            def _write_holder(self, purpose, session_name):
+                self.purposes.append(purpose)
+                super()._write_holder(purpose, session_name)
+
+        spy = SpyFloor(
+            lock_path=str(tmp_path / "server.lock"),
+            info_path=str(tmp_path / "server.json"),
+        )
+        server._voice_floor = spy
+
+        # Real SpeechQueue wired to the floor phase bridge
+        engine = MagicMock()
+        engine.synthesize.return_value = SynthesisResult(
+            samples=np.zeros(2400, dtype=np.float32), sample_rate=24000,
+            duration_ms=100.0, synthesis_ms=10.0,
+        )
+        player = MagicMock()
+        player.play.return_value = PlaybackResult(success=True, duration_ms=100.0)
+        server._speech_queue = SpeechQueue(
+            engine, player, phase_reporter=server._report_floor_phase,
+        )
+
+        # Mic mock: on_ready fires (mic-open moment), then returns audio
+        async def mock_record(vad=None, timeout=15, silence_threshold=1.5,
+                              cancel_event=None, on_ready=None):
+            if on_ready:
+                on_ready()
+            await asyncio.sleep(0.02)
+            return np.zeros(16000, dtype=np.float32)
+
+        server._mic_capture.record = mock_record
+        server._stt_engine.transcribe.return_value = TranscriptionResult(
+            text="go ahead", confidence=0.9, transcription_ms=1.0, language="en",
+        )
+
+        result = await server.speak_then_listen("Eric", "What's up?")
+
+        assert result["speak"]["success"] is True
+        assert result["listen"]["success"] is True
+        assert spy.purposes == [
+            "speak_then_listen",  # outer atomic hold
+            "synthesizing",      # inner speak acquire (nothing audible yet)
+            "synthesizing",      # queue: chunk synthesis starts
+            "speak",              # queue: actual playback
+            "processing",         # inner listen acquire (pre-mic setup)
+            "listen",             # mic-open moment (on_ready)
+            "transcribing",       # mic closed, Whisper running
+        ]
+        assert spy.holder_info() is None  # released at the end
+
+
 # ─── Server integration tests ─────────────────────────────────────────────────
 
 
