@@ -5,6 +5,7 @@ All notable changes to VoiceSmith MCP are documented here.
 ## [Unreleased]
 
 ### Added
+- **Voice floor (multi-session audio arbitration):** New `voice_floor.py` — a kernel-managed flock that serializes ALL audio channel use (speaking *and* listening) across concurrent sessions. Fixes cross-talk when many agent threads run at once: one session's open mic no longer records another session's TTS as user speech, sessions no longer talk over each other, and `speak_then_listen` now holds the floor across the speak→listen gap so nothing barges in between question and answer. Waiters queue asynchronously and return a structured `floor_busy` error (with holder name/purpose/age) after `coordination.floor_wait` seconds (default 20). Crash-safe (flock auto-releases), reentrant per task, cancellable. The wake listener pauses while any session holds the floor, and wake-word recording takes it too. `status` reports the current holder. Disable via `coordination.enabled: false`.
 - **`export_speech` tool:** Synthesize speech and write it to an audio file (e.g. WAV) instead of playing it. Same name/voice resolution and `speed` as `speak`; returns the output path, `duration_ms`, `synthesis_ms`, and `sample_rate`. Useful for building videos and screencasts, archiving narration, or batch TTS. Creates parent directories if missing.
 
 ### Fixed

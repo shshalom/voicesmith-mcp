@@ -31,6 +31,7 @@ from shared import (
     WAKE_MIC_LOCK_PATH,
     get_logger,
 )
+from voice_floor import FloorBusyError, get_default_floor
 
 logger = get_logger("wake-listener")
 
@@ -212,6 +213,19 @@ class WakeWordListener:
                     self._state = WakeState.LISTENING
                 continue
 
+            # Pause while ANY session (including ours) holds the voice
+            # floor — e.g. a sibling session is speaking or listening.
+            # Keeps the wake mic from capturing their TTS as a wake word
+            # and from double-opening the mic.
+            while not self._stop_event.is_set() and get_default_floor().holder_info() is not None:
+                with self._state_lock:
+                    self._state = WakeState.YIELDED
+                time.sleep(0.2)
+            if self._stop_event.is_set():
+                break
+            with self._state_lock:
+                self._state = WakeState.LISTENING
+
             # Open mic for wake word detection
             audio_queue = queue.Queue()
 
@@ -233,7 +247,15 @@ class WakeWordListener:
                 continue
 
             try:
+                last_floor_check = 0.0
                 while not self._stop_event.is_set() and not self._yield_event.is_set():
+                    # Once per second, bail out if someone took the floor
+                    # (recheck via the outer loop, which waits for it to free).
+                    now = time.time()
+                    if now - last_floor_check >= 1.0:
+                        last_floor_check = now
+                        if get_default_floor().holder_info() is not None:
+                            break
                     try:
                         chunk = audio_queue.get(timeout=0.2)
                     except queue.Empty:
@@ -280,6 +302,28 @@ class WakeWordListener:
 
         with self._state_lock:
             self._state = WakeState.RECORDING
+
+        # Take the voice floor before recording: another session may be
+        # speaking or listening. The user just said the wake word, so
+        # wait briefly; if the floor stays busy, drop this wake event
+        # rather than record a sibling session's TTS as user speech.
+        floor = get_default_floor()
+        try:
+            floor.acquire_sync("wake", session_name="", wait_timeout=3.0)
+        except FloorBusyError:
+            logger.info("Wake word detected but voice floor busy — ignoring")
+            with self._state_lock:
+                self._state = WakeState.LISTENING
+            return
+
+        try:
+            self._record_and_inject()
+        finally:
+            floor.release()
+
+    def _record_and_inject(self):
+        """Record post-wake speech, transcribe, and inject (floor held)."""
+        import sounddevice as sd
 
         # Flush and wait for audio system to settle
         # Needs enough time for the wake phrase audio to clear from the mic buffer

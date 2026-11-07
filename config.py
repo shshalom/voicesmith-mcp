@@ -53,10 +53,18 @@ class WakeWordConfig:
 
 
 @dataclass
+class CoordinationConfig:
+    """Cross-session audio channel arbitration (the voice floor)."""
+    enabled: bool = True
+    floor_wait: float = 20.0  # Max seconds to wait for another session's speak/listen to finish
+
+
+@dataclass
 class AppConfig:
     tts: TTSConfig = field(default_factory=TTSConfig)
     stt: STTConfig = field(default_factory=STTConfig)
     wake_word: WakeWordConfig = field(default_factory=WakeWordConfig)
+    coordination: CoordinationConfig = field(default_factory=CoordinationConfig)
     main_agent: str = "Eric"
     last_voice_name: Optional[str] = None
     voice_registry: dict[str, str] = field(default_factory=dict)
@@ -145,6 +153,14 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
             if "check_updates" in data:
                 config.check_updates = bool(data["check_updates"])
 
+            # Coordination config
+            if "coordination" in data:
+                coord = data["coordination"]
+                if "enabled" in coord:
+                    config.coordination.enabled = bool(coord["enabled"])
+                if "floor_wait" in coord:
+                    config.coordination.floor_wait = float(coord["floor_wait"])
+
             # Wake word config
             if "wake_word" in data:
                 ww = data["wake_word"]
@@ -215,6 +231,10 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
         "log_file": config.log_file,
         "http_port": config.http_port,
         "check_updates": config.check_updates,
+        "coordination": {
+            "enabled": config.coordination.enabled,
+            "floor_wait": config.coordination.floor_wait,
+        },
         "wake_word": {
             "enabled": config.wake_word.enabled,
             "model": config.wake_word.model,

@@ -65,6 +65,7 @@
 | 30 | 🟢 | Session name hook mismatch | Hook guessed wrong name from sessions.json. Fixed: fallback queries /status for actual name |
 | 31 | 🟢 | Periodic save thread not starting | _start_periodic_save_thread defined but never started the thread. Fixed. |
 | 32 | 🟢 | Multi-client audio service | audio_service.c now broadcasts to all connected clients (was single-client) |
+| 46 | 🟢 | Cross-session audio cross-talk | Voice floor (flock) serializes speak + listen across sessions; speak_then_listen is now atomic across both halves. See `voice_floor.py` |
 
 ---
 
@@ -105,6 +106,7 @@
 | Wake word | openWakeWord (ONNX) | Local, custom trainable, ~200KB models |
 | Wake word delivery | MCP listen(mode="wake") + HTTP /wake_message | No terminal injection needed, works with any IDE |
 | Audio lock | fcntl.flock | Kernel-managed, no stale locks on crash |
+| Voice floor | fcntl.flock + advisory sidecar | Serializes speak AND listen across sessions; reentrant per task; crash-safe |
 | Menu bar framework | SwiftUI (native) | ~5MB memory, SF Symbols, proper NSStatusItem, MenuBarExtra API |
 | Audio device switching | Live config.json read on each play | Changes take effect without server restart |
 | Config safety | Atomic writes (temp + rename), skip on read failure | Prevents config corruption from race conditions |

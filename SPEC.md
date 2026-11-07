@@ -325,6 +325,28 @@ If `stt.nudge_on_timeout` is enabled in config, the tool speaks "I didn't catch 
 
 The AI should then wait for typed input — never retry `listen`.
 
+#### Multi-Session Coordination: the Voice Floor
+
+Every MCP server session is a separate process, but all sessions share one speaker and one microphone. The **voice floor** (`voice_floor.py`) is a kernel-managed `flock` on `/tmp/voicesmith-floor.lock` that must be held for any use of the audio channel:
+
+- `speak` holds it for the entire utterance (all chunks — another session can no longer interleave between chunks of long speech).
+- `listen` holds it across record + transcribe (another session's TTS can no longer be recorded as user speech).
+- `speak_then_listen` holds it **once across both halves** — no other session can start talking between the question and the open mic.
+- Wake word recording takes it too, and the wake listener pauses while any session holds it.
+
+Waiters poll the lock non-blockingly every 50 ms (async sleep — the event loop stays live) and give up after `coordination.floor_wait` seconds (default 20), returning a structured error so the calling agent can adapt:
+
+```json
+{
+  "success": false,
+  "error": "floor_busy",
+  "held_by": { "pid": 4213, "name": "Nova", "purpose": "listen", "acquired_at": 1799012345.678 },
+  "message": "The audio channel is in use by Nova (listen for 6.2s). Wait a few seconds and retry, or continue in text."
+}
+```
+
+Properties: crash-safe (the kernel releases `flock` when a holder dies — no stale locks, no cleanup daemons), reentrant per task/thread (inner `speak`/`listen` calls inside `speak_then_listen` share the outer hold), and cancellation-safe (a cancelled wait never leaves a held-but-forgotten lock). Holder identity comes from an advisory sidecar (`/tmp/voicesmith-floor.json`); `holder_info()` probes the lock itself, so sidecars left by crashed holders are detected as stale and ignored. Set `coordination.enabled: false` in `config.json` to disable (legacy overlapping behavior). The `status` tool and HTTP `/status` report the current holder under `floor`.
+
 ### Diagnostic Tools
 
 #### `status`
@@ -630,7 +652,11 @@ The `config.json` in the project repo root is the **default template** copied du
   "voice_registry": {},
   "log_level": "info",
   "log_file": false,
-  "http_port": 7865
+  "http_port": 7865,
+  "coordination": {
+    "enabled": true,
+    "floor_wait": 20.0
+  }
 }
 ```
 
@@ -645,6 +671,8 @@ The `main_agent` field identifies which agent name is the primary/lead agent. Th
 The `duck_media` field enables automatic media ducking during TTS playback. When `true`, the server pauses Apple Music, Spotify, and browser audio (Chrome, Brave, Edge, Safari) before speaking and resumes them after. Uses Bluetooth-aware delays (3s unduck delay for wireless audio devices). macOS only.
 
 The `nudge_on_timeout` field controls whether `speak_then_listen` speaks a verbal nudge ("I didn't catch that. Go ahead and type it.") when the user doesn't respond within the timeout. Default: `false` (silent fallback to text).
+
+The `coordination` section controls the voice floor (multi-session audio arbitration, described under **Multi-Session Coordination** above). `enabled` defaults to `true`; `floor_wait` (seconds, default 20) is how long a speak/listen call waits for another session to finish before returning `floor_busy`.
 
 ### Environment Variables
 

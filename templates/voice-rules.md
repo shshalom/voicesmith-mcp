@@ -29,6 +29,10 @@ You have access to voice tools via the VoiceSmith MCP server.
 - Use `speak_then_listen` whenever you need user input — it combines speaking and opening the mic in one call.
 - If `listen` returns timeout or cancelled, fall back to requesting text input. Do not retry `listen`.
 
+## Shared Audio Channel
+- Multiple sessions share one speaker and one microphone. VoiceSmith serializes them: only one session speaks or listens at a time, and `speak_then_listen` holds the channel across both so nothing barges in between your question and the open mic.
+- When another session holds the channel, your voice call waits for it, then either proceeds (you'll just take a bit longer) or returns `"error": "floor_busy"` with the holder's name and purpose in `held_by`.
+
 ## Sub-Agents
 - Pick voice names matching available Kokoro voices (the voice ID suffix is the name — e.g., af_nova → "Nova", am_fenrir → "Fenrir").
 - Each sub-agent must use its own unique name. Never reuse "{{MAIN_AGENT}}".
@@ -37,6 +41,7 @@ You have access to voice tools via the VoiceSmith MCP server.
 ## Error Handling
 - If `speak` or `speak_then_listen` fails, fall back to text silently. Do not retry.
 - If `listen` times out, fall back to text. Do not retry.
+- If a voice tool returns `"error": "floor_busy"`: wait a few seconds, retry ONCE, then fall back to text. Another session was mid-sentence or mid-listen; check `held_by` to see who.
 
 ## Fallback
 - If voice tools are not available, respond in text only. Do not mention voice capabilities.

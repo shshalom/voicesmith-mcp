@@ -21,6 +21,10 @@
   "log_file": false,
   "http_port": 7865,
   "check_updates": true,
+  "coordination": {
+    "enabled": true,
+    "floor_wait": 20.0
+  },
   "wake_word": {
     "enabled": false,
     "model": "hey_listen",
