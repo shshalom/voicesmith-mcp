@@ -227,6 +227,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "/stop": self._handle_stop,
             "/mute": self._handle_mute,
             "/unmute": self._handle_unmute,
+            "/t3_thread": self._handle_t3_thread,
             "/wake_enable": self._handle_wake_enable,
             "/wake_disable": self._handle_wake_disable,
             "/transcribe": self._handle_transcribe,
@@ -428,6 +429,28 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(200, result)
         except Exception as e:
             self._json_response(500, {"error": "set_voice_failed", "message": str(e)})
+
+    def _handle_t3_thread(self):
+        """Bind this session to its T3 Code thread (companion-driven)."""
+        if _event_loop is None:
+            self._json_response(500, {"error": "server_not_ready"})
+            return
+
+        params = self._read_json_body()
+        if params is None:
+            return
+
+        thread_id = params.get("thread_id")
+        if not thread_id:
+            self._json_response(400, {"error": "missing_thread_id"})
+            return
+
+        future = asyncio.run_coroutine_threadsafe(set_thread(thread_id), _event_loop)
+        try:
+            result = future.result(timeout=15)
+            self._json_response(200, result)
+        except Exception as e:
+            self._json_response(500, {"error": "thread_bind_failed", "message": str(e)})
 
     def _handle_stop(self):
         """Stop playback and cancel active listen."""
@@ -1341,6 +1364,54 @@ async def stop() -> dict:
         "stopped_playback": stopped_playback,
         "cancelled_listen": cancelled_listen,
     }
+
+
+@mcp.tool()
+async def set_thread(thread_id: str) -> dict:
+    """Bind this VoiceSmith session to its T3 Code conversation thread.
+
+    Call once, early, with YOUR OWN T3 thread id (your coordinator or
+    companion knows it). Maps this voice session to its conversation so
+    hardware companions (Codex Micro) and the menu bar can show which
+    thread is speaking or listening. Idempotent; also repairs a registry
+    entry that was wiped by an old cleanup pass.
+    """
+    global _session_info
+    _capture_event_loop()
+
+    if not thread_id or not isinstance(thread_id, str):
+        return {"success": False, "error": "missing_thread_id"}
+
+    from session_registry import set_session_thread_id
+
+    fallback = None
+    if set_session_thread_id(os.getpid(), thread_id) is None:
+        # Our registry entry is gone (pre-fix cleanup passes wiped the
+        # registry while sessions ran). Re-create it from what we know.
+        if _session_info is None:
+            return {"success": False, "error": "session_not_found",
+                    "message": "No session metadata to register against."}
+        fallback = {
+            "name": _session_info.get("name"),
+            "voice": _session_info.get("voice"),
+            "port": _session_info.get("port"),
+            "pid": os.getpid(),
+            "session_id": _session_info.get("session_id"),
+            "tmux_session": _session_info.get("tmux_session"),
+            "started_at": _session_info.get("started_at"),
+        }
+
+    updated = set_session_thread_id(os.getpid(), thread_id, fallback_session=fallback)
+    if updated is None:
+        return {"success": False, "error": "thread_bind_failed"}
+
+    _session_info = updated
+    # Stamp the thread id onto every floor sidecar write from now on, so
+    # companions see it on the very next hold without a restart.
+    if _voice_floor is not None:
+        _voice_floor.set_default_extra({"thread_id": thread_id})
+    logger.info(f"Session bound to T3 thread {thread_id}")
+    return {"success": True, "thread_id": thread_id, "name": updated.get("name")}
 
 
 @mcp.tool(name="mute")

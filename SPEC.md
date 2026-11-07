@@ -361,6 +361,10 @@ Properties: crash-safe (the kernel releases `flock` when a holder dies — no st
 
 Companions should treat only `speak`/`listen` as overlays; all other values mean "floor held, nothing to hear" (normal status colors). The sidecar disappears on floor release. It is advisory only — a lone file read cannot prove holder liveness (crash or PID reuse); consumers must not treat it as lock authority. Sub-250 ms phases may be missed by polling.
 
+**Thread identity.** Sessions bind to their T3 Code thread in two ways: automatically at startup when the harness injects `T3CODE_THREAD_ID` into the spawned server (spawn-path dependent — not all harnesses provide it), or explicitly via the `set_thread` MCP tool / `POST /t3_thread` HTTP endpoint (idempotent, repairs a wiped registry entry, and stamps `thread_id` onto every subsequent sidecar write). The id persists in `sessions.json` under `t3_thread_id`.
+
+**Registry robustness.** `sessions.json` liveness checks must never misread a failed probe as death: sandboxed agent processes (T3 Code seatbelt) get `EPERM` from `os.kill` on other sessions (now falls back to `ps`), a `ps` failure yields "unknown" (keep the session), and only a confirmed reparent to launchd (ppid == 1) triggers the orphan SIGTERM.
+
 #### Engine Service (Shared Model Host)
 
 Every MCP session is a separate process, and each one used to load its own copy of the Kokoro ONNX and faster-whisper/CTranslate2 stacks (~1.5 GB per session — 1.4–1.8 GB measured with whisper-medium). With many agent threads that is tens of GB.

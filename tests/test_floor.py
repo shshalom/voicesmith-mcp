@@ -376,6 +376,69 @@ class TestPhaseRefinement:
         assert spy.holder_info() is None  # released at the end
 
 
+# ─── set_thread tool ──────────────────────────────────────────────────────────
+
+
+class TestSetThreadTool:
+    @pytest.mark.asyncio
+    async def test_set_thread_binds_and_stamps_floor(self, tmp_path, monkeypatch):
+        """set_thread updates the registry, session info, and floor extra."""
+        import session_registry as sr
+
+        registry_path = tmp_path / "sessions.json"
+        registry_path.write_text(json.dumps(
+            {"sessions": [{
+                "name": "Liam", "voice": "am_liam", "pid": os.getpid(),
+                "port": 7870, "session_id": None, "tmux_session": None,
+                "started_at": "2026-11-07T09:14:45+00:00",
+            }]}
+        ))
+        monkeypatch.setattr(sr, "_sessions_path", lambda: registry_path)
+
+        server = _setup_floor_server(tmp_path)
+        result = await server.set_thread("t3-thread-96c0")
+
+        assert result["success"] is True
+        assert result["thread_id"] == "t3-thread-96c0"
+        assert result["name"] == "Liam"
+        assert server._session_info["t3_thread_id"] == "t3-thread-96c0"
+
+        # Floor extra stamped: the very next hold carries the thread id
+        await server._voice_floor.acquire("speak", "Liam")
+        assert server._voice_floor.holder_info()["thread_id"] == "t3-thread-96c0"
+        server._voice_floor.release()
+
+        # Persisted in the registry for companion pid-lookups
+        stored = json.loads(registry_path.read_text())["sessions"]
+        assert stored[0]["t3_thread_id"] == "t3-thread-96c0"
+
+    @pytest.mark.asyncio
+    async def test_set_thread_recovers_wiped_entry(self, tmp_path, monkeypatch):
+        """A wiped registry entry is re-created from session metadata."""
+        import session_registry as sr
+
+        registry_path = tmp_path / "sessions.json"
+        registry_path.write_text(json.dumps({"sessions": []}))
+        monkeypatch.setattr(sr, "_sessions_path", lambda: registry_path)
+
+        server = _setup_floor_server(tmp_path)
+        result = await server.set_thread("t3-thread-96c0")
+
+        assert result["success"] is True
+        stored = json.loads(registry_path.read_text())["sessions"]
+        assert len(stored) == 1
+        assert stored[0]["pid"] == os.getpid()
+        assert stored[0]["name"] == "Eric"  # from _session_info
+        assert stored[0]["t3_thread_id"] == "t3-thread-96c0"
+
+    @pytest.mark.asyncio
+    async def test_set_thread_rejects_empty_id(self, tmp_path):
+        server = _setup_floor_server(tmp_path)
+        result = await server.set_thread("")
+        assert result["success"] is False
+        assert result["error"] == "missing_thread_id"
+
+
 # ─── Server integration tests ─────────────────────────────────────────────────
 
 
