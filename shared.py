@@ -26,6 +26,7 @@ LISTEN_TIMEOUT = 15          # Default max seconds to wait for speech
 REGISTRY_SAVE_INTERVAL = 60  # Seconds between periodic registry saves
 DEFAULT_HTTP_PORT = 7865     # HTTP listener port for push-to-talk
 SESSIONS_FILE_NAME = "sessions.json"
+STATE_FILE_NAME = "state.json"     # Shared cross-session state (mute flags, volume)
 AUDIO_LOCK_PATH = "/tmp/voicesmith-audio.lock"
 FLOOR_LOCK_PATH = "/tmp/voicesmith-floor.lock"   # Cross-session speaker+mic arbitration
 FLOOR_INFO_PATH = "/tmp/voicesmith-floor.json"   # Sidecar: who holds the floor (advisory)

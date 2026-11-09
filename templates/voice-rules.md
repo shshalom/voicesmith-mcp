@@ -25,6 +25,7 @@ You have access to voice tools via the VoiceSmith MCP server.
 ## Speed Preferences
 - The `speak` tool accepts a `speed` parameter (default 1.0). Values < 1.0 are slower, > 1.0 are faster.
 - If the user asks to speak slower or faster, adjust the speed and remember their preference for the session.
+- The `set_volume` tool adjusts VoiceSmith's own playback volume (0.0 silent to 1.0 full; 1-100 treated as a percent). It works even though agents speak through a separate output device — no device switching needed. If the user asks for louder or quieter, adjust it and remember their preference for the session.
 
 ## Listening
 - Use `speak_then_listen` whenever you need user input — it combines speaking and opening the mic in one call.

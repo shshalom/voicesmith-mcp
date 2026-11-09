@@ -44,6 +44,7 @@ from shared import (
 from config import load_config, save_config, get_config_path, AppConfig
 from session_registry import register_session, rename_session, unregister_session
 from voice_floor import VoiceFloor, FloorBusyError, get_default_floor
+from server_state import read_state, update_state, clamp_volume, is_globally_muted
 from tts.media_duck import duck, unduck, is_bluetooth_output
 
 
@@ -86,6 +87,7 @@ _session_info: dict = None
 _event_loop: asyncio.AbstractEventLoop = None
 _wake_listener = None
 _voice_floor: VoiceFloor = None  # Cross-session speaker+mic arbitration
+_session_volume = None  # Per-session volume override (0.0-1.0); None = use global
 
 
 # ─── Startup / Shutdown ──────────────────────────────────────────────────────
@@ -107,6 +109,7 @@ def _init_tts(config: AppConfig):
             _tts_engine, _audio_player,
             duck_media=config.tts.duck_media,
             phase_reporter=_report_floor_phase,
+            volume_provider=_playback_gain,
         )
         logger.info("TTS subsystem initialized (remote engine service)")
         return
@@ -120,6 +123,7 @@ def _init_tts(config: AppConfig):
             _tts_engine, _audio_player,
             duck_media=config.tts.duck_media,
             phase_reporter=_report_floor_phase,
+            volume_provider=_playback_gain,
         )
         logger.info("TTS subsystem initialized")
     except TTSEngineError as e:
@@ -227,6 +231,10 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "/stop": self._handle_stop,
             "/mute": self._handle_mute,
             "/unmute": self._handle_unmute,
+            "/mute_all": self._handle_mute_all,
+            "/mute_subagents": self._handle_mute_subagents,
+            "/volume": self._handle_volume,
+            "/session_volume": self._handle_session_volume,
             "/t3_thread": self._handle_t3_thread,
             "/wake_enable": self._handle_wake_enable,
             "/wake_disable": self._handle_wake_disable,
@@ -257,6 +265,12 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "uptime_s": round(time.time() - _startup_time),
             "last_tool_call_age_s": round(time.time() - _last_tool_call),
             "muted": _muted,
+            "effectively_muted": _effective_mute(),
+            "is_subagent": _session_is_subagent(),
+            "volume": {
+                "session": _session_volume,
+                "effective": round(_playback_gain(), 3),
+            },
             "listening": _listen_active,
             "tts": {
                 "loaded": _tts_engine is not None and _tts_engine.is_loaded(),
@@ -480,6 +494,59 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
         logger.info("Unmuted via HTTP")
         self._json_response(200, {"success": True, "muted": False})
 
+    def _handle_mute_all(self):
+        """Global meeting mute — applies to every session, now and future."""
+        params = self._read_json_body()
+        if params is None:
+            return
+        muted = bool(params.get("muted", True))
+        state = update_state(mute_all=muted)
+        logger.info(f"Mute-all set to {muted} via HTTP")
+        self._json_response(200, {"success": True, **state})
+
+    def _handle_mute_subagents(self):
+        """Mute agent-spawned sessions only; user's main threads unaffected."""
+        params = self._read_json_body()
+        if params is None:
+            return
+        muted = bool(params.get("muted", True))
+        state = update_state(mute_subagents=muted)
+        logger.info(f"Mute-subagents set to {muted} via HTTP")
+        self._json_response(200, {"success": True, **state})
+
+    def _handle_volume(self):
+        """Set the shared default volume (sessions without their own override)."""
+        params = self._read_json_body()
+        if params is None:
+            return
+        if "volume" not in params:
+            self._json_response(400, {"error": "missing_volume"})
+            return
+        v = clamp_volume(params.get("volume"))
+        state = update_state(volume=v)
+        logger.info(f"Global volume set to {v:.2f} via HTTP")
+        self._json_response(200, {"success": True, "volume": v, "state": state})
+
+    def _handle_session_volume(self):
+        """Set this session's volume override (null clears it)."""
+        global _session_volume
+        params = self._read_json_body()
+        if params is None:
+            return
+        raw = params.get("volume")
+        if raw is None:
+            _session_volume = None
+            self._json_response(200, {"success": True, "cleared": True,
+                                      "volume": _playback_gain()})
+            return
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            self._json_response(400, {"error": "invalid_volume"})
+            return
+        v = clamp_volume(raw)
+        _session_volume = v
+        logger.info(f"Session volume set to {v:.2f} via HTTP")
+        self._json_response(200, {"success": True, "volume": v})
+
     def _handle_wake_enable(self):
         """Enable wake word listener."""
         if _event_loop is None:
@@ -680,7 +747,7 @@ def _shutdown():
 
 def _play_ready_sound():
     """Play a short ready sound (Tink) to signal the user to start speaking."""
-    if _muted:
+    if _effective_mute():
         return
     if platform.system() != "Darwin":
         return
@@ -764,6 +831,47 @@ def _report_floor_phase(phase: str) -> None:
         _voice_floor.set_phase(phase)
 
 
+# ─── Mute + volume (global state × session overrides) ────────────────────────
+
+def _session_is_subagent() -> bool:
+    """Is this session an agent-spawned child rather than a user thread?
+
+    T3 Code gives user-created top-level threads plain UUID ids, while
+    agent-spawned child threads get prefixed ids containing ':' (e.g.
+    "thread:delegated-task:...", "mcp:launch:...", "thread:provider:...").
+    Sessions without a bound thread id are treated as main threads — the
+    safe default for mute_subagents is to only mute identifiable children.
+    """
+    tid = (_session_info or {}).get("t3_thread_id") or os.environ.get("T3CODE_THREAD_ID")
+    return bool(tid) and ":" in str(tid)
+
+
+def _effective_mute() -> bool:
+    """True when this session must stay silent right now.
+
+    Mute sources (any one suffices):
+    - this session's own mute (MCP mute tool / menu bar per-session mute)
+    - the shared "mute all" flag (meeting mode — applies to every session,
+      including ones spawned after the flag was set)
+    - the shared "mute subagents" flag, when this session is a subagent
+    """
+    if _muted:
+        return True
+    state = read_state()
+    if state.get("mute_all"):
+        return True
+    if state.get("mute_subagents") and _session_is_subagent():
+        return True
+    return False
+
+
+def _playback_gain() -> float:
+    """Playback gain for this session: per-session override, else global."""
+    if _session_volume is not None:
+        return clamp_volume(_session_volume)
+    return clamp_volume(read_state().get("volume", 1.0))
+
+
 # ─── MCP Tools ────────────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -797,7 +905,7 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
     if _tts_engine is None or _speech_queue is None:
         return {"success": False, "error": "tts_unavailable", "message": "TTS engine not loaded"}
 
-    if _muted:
+    if _effective_mute():
         voice_id, auto_assigned = _registry.get_voice(name)
         if block:
             return {"success": True, "voice": voice_id, "auto_assigned": auto_assigned,
@@ -1012,8 +1120,9 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
     if _stt_engine is None or _mic_capture is None:
         return {"success": False, "error": "stt_unavailable", "message": "STT engine not loaded"}
 
-    if _muted:
-        return {"success": False, "error": "muted", "message": "Voice input is muted"}
+    if _effective_mute():
+        return {"success": False, "error": "muted",
+                "message": "Voice input is muted (session mute, mute-all, or subagent mute)"}
 
     if _listen_active:
         return {"success": False, "error": "mic_busy", "message": "Another listen call is in progress"}
@@ -1178,7 +1287,7 @@ async def speak_then_listen(
             if voice and _tts_engine:
                 try:
                     result = _tts_engine.synthesize(nudge_text, voice, speed)
-                    _audio_player.play(result.samples, result.sample_rate)
+                    _audio_player.play(result.samples, result.sample_rate, gain=_playback_gain())
                     listen_result["nudge_spoken"] = True
                 except Exception:
                     pass
@@ -1417,7 +1526,12 @@ async def set_thread(thread_id: str) -> dict:
 
 @mcp.tool(name="mute")
 async def mute_tool() -> dict:
-    """Temporarily silence all voice output. Speak still returns success but no audio plays."""
+    """Mute THIS session's voice output. Speak still returns success but no audio plays.
+
+    Note: this only mutes this session. Global meeting mute is the
+    menu bar's "Mute All" (or the shared state's mute_all flag), which
+    applies to every session including ones spawned later.
+    """
     global _muted
     _muted = True
     logger.info("Voice muted")
@@ -1426,11 +1540,44 @@ async def mute_tool() -> dict:
 
 @mcp.tool(name="unmute")
 async def unmute_tool() -> dict:
-    """Resume voice output after muting."""
+    """Unmute this session's voice output (session-level mute only —
+    a global "mute all" or "mute subagents" set outside this session still applies)."""
     global _muted
     _muted = False
     logger.info("Voice unmuted")
     return {"success": True, "muted": False}
+
+
+@mcp.tool()
+async def set_volume(volume: float, scope: str = "session") -> dict:
+    """Set VoiceSmith playback volume (affects this server's speaker output only).
+
+    Args:
+        volume: 0.0 (silent) to 1.0 (full). Values 1-100 are treated as
+            percentages and scaled. This adjusts VoiceSmith's own gain, so
+            it works even when agents speak through a different output
+            device than the system default — no device switching needed.
+        scope: "session" (default) sets this session's volume, overriding
+            the global one. "all" sets the shared default that every
+            session without its own override uses (including future ones).
+    """
+    global _session_volume
+    _capture_event_loop()
+
+    if isinstance(volume, bool) or not isinstance(volume, (int, float)):
+        return {"success": False, "error": "invalid_volume",
+                "message": "Pass a number between 0.0 and 1.0 (or 1-100 as a percent)."}
+    v = clamp_volume(volume)
+    if scope == "all":
+        update_state(volume=v)
+        logger.info(f"Global VoiceSmith volume set to {v:.2f}")
+        return {"success": True, "scope": "all", "volume": v}
+    if scope != "session":
+        return {"success": False, "error": "invalid_scope",
+                "message": "scope must be 'session' or 'all'."}
+    _session_volume = v
+    logger.info(f"Session volume set to {v:.2f}")
+    return {"success": True, "scope": "session", "volume": v}
 
 
 @mcp.tool()
@@ -1481,6 +1628,18 @@ async def status() -> dict:
             "loaded": _vad is not None and _vad.is_loaded(),
         },
         "muted": _muted,
+        "mute": {
+            "session": _muted,
+            "all": is_globally_muted(),
+            "subagents": bool(read_state().get("mute_subagents")),
+            "is_subagent": _session_is_subagent(),
+            "effective": _effective_mute(),
+        },
+        "volume": {
+            "session": _session_volume,
+            "global": clamp_volume(read_state().get("volume", 1.0)),
+            "effective": round(_playback_gain(), 3),
+        },
         "uptime_s": uptime_s,
         "registry_size": _registry.size if _registry else 0,
         "queue_depth": _speech_queue.depth if _speech_queue else 0,
@@ -1696,6 +1855,11 @@ def _start_preheat_intro():
         intro_name = _session_info.get("name", default_name) if _session_info else default_name
         intro_voice = _session_info.get("voice", default_voice) if _session_info else default_voice
 
+        # Respect shared mute state — a meeting mute applies to intros too.
+        if _effective_mute():
+            logger.info("Skipping preheat intro — muted")
+            return
+
         # Take the voice floor so the intro doesn't talk over another
         # session's speech or open mic. Skip the intro if the floor stays
         # busy — an intro is nice-to-have, never worth queueing for.
@@ -1709,7 +1873,7 @@ def _start_preheat_intro():
             result = _tts_engine.synthesize(f"{intro_name} here, ready to go.", intro_voice, 1.0)
             if _floor_enabled():
                 _voice_floor.set_phase("speak")  # actual audible playback
-            _audio_player.play(result.samples, result.sample_rate)
+            _audio_player.play(result.samples, result.sample_rate, gain=_playback_gain())
             logger.info(f"Preheat intro spoken: {intro_name}")
         except Exception as e:
             logger.warning(f"Preheat intro failed: {e}")

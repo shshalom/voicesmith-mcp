@@ -7,11 +7,27 @@ import subprocess
 import tempfile
 import time
 
+import numpy as np
 import soundfile as sf
 
 from shared import PlaybackResult, AudioPlayerError, AUDIO_LOCK_PATH, get_logger
 
 logger = get_logger("tts.audio_player")
+
+
+def apply_gain(samples, gain: float = 1.0):
+    """Scale samples by gain (0.0-1.0), clamping to full scale.
+
+    Player-agnostic volume: works for mpv, afplay, and aplay alike, and
+    applies to VoiceSmith's own output without touching the system
+    device volume.
+    """
+    if gain is None or gain == 1.0:
+        return samples
+    arr = np.asarray(samples)
+    if arr.dtype != np.float32:
+        arr = arr.astype(np.float32)
+    return np.clip(arr * np.float32(gain), -1.0, 1.0)
 
 
 class AudioPlayer:
@@ -134,12 +150,13 @@ class AudioPlayer:
             pass
         return self._audio_output_device
 
-    def play(self, samples, sample_rate: int) -> PlaybackResult:
+    def play(self, samples, sample_rate: int, gain: float = 1.0) -> PlaybackResult:
         """Play audio samples through the configured player.
 
         Args:
             samples: Audio samples (numpy array).
             sample_rate: Sample rate in Hz.
+            gain: Playback volume 0.0-1.0 applied to the samples (default 1.0).
 
         Returns:
             PlaybackResult with success status and timing.
@@ -147,6 +164,7 @@ class AudioPlayer:
         Raises:
             AudioPlayerError: If playback fails.
         """
+        samples = apply_gain(samples, gain)
         tmp_path = None
         try:
             # Write samples to a temporary WAV file

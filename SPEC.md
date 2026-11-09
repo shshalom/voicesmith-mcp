@@ -487,6 +487,22 @@ When the server IS running but you want to temporarily silence it:
 | Server on + muted | `speak` returns success but no audio plays |
 | Server on + unmuted | Back to normal voice |
 
+### Global State (mute all, mute subagents, volume)
+
+The old menu-bar "Mute All" POSTed to a snapshot of live sessions — anything spawned after the click (like sub-agents) kept talking. Global settings now live in a shared state file so they apply to **every** session, including ones spawned after the change:
+
+**File:** `~/.local/share/voicesmith-mcp/state.json` (atomic replace; writers flock `state.json.lock`, shared by the menu bar app and the Python servers).
+
+| Field | Meaning |
+|---|---|
+| `mute_all` | Meeting mode — no session speaks or listens, wake word detection pauses, ready sounds and intros are suppressed. The menu bar's Mute All sets this (not a per-session loop). |
+| `mute_subagents` | Mutes agent-spawned sessions only. A session is a subagent when its bound T3 thread id contains `:` (T3 gives user-created threads plain UUIDs, agent-spawned children prefixed ids). Unbound/non-T3 sessions are treated as main threads. |
+| `volume` | Global VoiceSmith playback gain, 0.0–1.0. Applied to the audio samples themselves, so it works regardless of which output device agents speak through — no device switching to adjust agent loudness. |
+
+Per-session controls remain: the `mute`/`unmute` tools (session-local), plus a per-session **volume override** (menu bar Session Activity slider, HTTP `POST /session_volume`, or the `set_volume(volume, scope="session")` tool) which wins over the global value; clearing it falls back to global. `set_volume(volume, scope="all")` sets the shared default from any agent.
+
+A session is effectively muted when **any** of: its own mute, `mute_all`, or (`mute_subagents` ∧ it is a subagent). `speak` then returns success-silent (agents fall back to text), `listen` returns a `muted` error, the preheat intro and ready sounds are skipped, and the wake listener pauses. `status` reports all of it under `mute` and `volume`.
+
 ---
 
 ## STT Architecture
