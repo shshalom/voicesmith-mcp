@@ -43,6 +43,7 @@ from shared import (
 )
 from config import load_config, save_config, get_config_path, AppConfig
 from session_registry import register_session, rename_session, unregister_session
+from voice_floor import VoiceFloor, FloorBusyError, get_default_floor
 from tts.media_duck import duck, unduck, is_bluetooth_output
 
 
@@ -84,6 +85,7 @@ _last_tool_call = time.time()  # Updated on every MCP tool call
 _session_info: dict = None
 _event_loop: asyncio.AbstractEventLoop = None
 _wake_listener = None
+_voice_floor: VoiceFloor = None  # Cross-session speaker+mic arbitration
 
 
 # ─── Startup / Shutdown ──────────────────────────────────────────────────────
@@ -92,14 +94,33 @@ def _init_tts(config: AppConfig):
     """Initialize TTS engine, audio player, and speech queue."""
     global _tts_engine, _audio_player, _speech_queue
 
-    from tts.kokoro_engine import KokoroEngine
     from tts.audio_player import AudioPlayer
     from tts.speech_queue import SpeechQueue
+
+    if config.engine.enabled:
+        # Remote mode: models live in the shared engine service (one copy
+        # for all sessions instead of ~1.5 GB per session).
+        from engine_client import RemoteTTSEngine
+        _tts_engine = RemoteTTSEngine()
+        _audio_player = AudioPlayer(config.tts.audio_player, config.tts.audio_output_device)
+        _speech_queue = SpeechQueue(
+            _tts_engine, _audio_player,
+            duck_media=config.tts.duck_media,
+            phase_reporter=_report_floor_phase,
+        )
+        logger.info("TTS subsystem initialized (remote engine service)")
+        return
+
+    from tts.kokoro_engine import KokoroEngine
 
     try:
         _tts_engine = KokoroEngine(config.tts.model_path, config.tts.voices_path)
         _audio_player = AudioPlayer(config.tts.audio_player, config.tts.audio_output_device)
-        _speech_queue = SpeechQueue(_tts_engine, _audio_player, duck_media=config.tts.duck_media)
+        _speech_queue = SpeechQueue(
+            _tts_engine, _audio_player,
+            duck_media=config.tts.duck_media,
+            phase_reporter=_report_floor_phase,
+        )
         logger.info("TTS subsystem initialized")
     except TTSEngineError as e:
         logger.error(f"TTS initialization failed: {e}")
@@ -115,7 +136,11 @@ def _init_stt(config: AppConfig):
     from stt.mic_capture import MicCapture
 
     try:
-        _stt_engine = WhisperEngine(config.stt.model_size, config.stt.language)
+        if config.engine.enabled:
+            from engine_client import RemoteSTTEngine
+            _stt_engine = RemoteSTTEngine()
+        else:
+            _stt_engine = WhisperEngine(config.stt.model_size, config.stt.language)
     except STTEngineError as e:
         logger.error(f"STT initialization failed: {e}")
         _stt_engine = None
@@ -128,7 +153,8 @@ def _init_stt(config: AppConfig):
 
     if _stt_engine is not None:
         _mic_capture = MicCapture(STT_SAMPLE_RATE, config.stt.audio_input_device)
-        logger.info("STT subsystem initialized")
+        logger.info("STT subsystem initialized"
+                    + (" (remote engine service)" if config.engine.enabled else ""))
 
 
 def _init_registry(config: AppConfig):
@@ -201,6 +227,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "/stop": self._handle_stop,
             "/mute": self._handle_mute,
             "/unmute": self._handle_unmute,
+            "/t3_thread": self._handle_t3_thread,
             "/wake_enable": self._handle_wake_enable,
             "/wake_disable": self._handle_wake_disable,
             "/transcribe": self._handle_transcribe,
@@ -223,6 +250,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "port": _session_info.get("port") if _session_info else None,
             "pid": _session_info.get("pid") if _session_info else None,
             "session_id": _session_info.get("session_id") if _session_info else None,
+            "t3_thread_id": _session_info.get("t3_thread_id") if _session_info else None,
             "tmux_session": _session_info.get("tmux_session") if _session_info else None,
             "started_at": _session_info.get("started_at") if _session_info else None,
             "mcp_connected": _event_loop is not None,
@@ -253,6 +281,8 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             },
             "queue_depth": _speech_queue.depth if _speech_queue else 0,
             "registry_size": _registry.size if _registry else 0,
+            "floor": _floor_status(),
+            "engine_service": _engine_service_status(),
         }
         self._json_response(200, data)
 
@@ -400,6 +430,28 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(200, result)
         except Exception as e:
             self._json_response(500, {"error": "set_voice_failed", "message": str(e)})
+
+    def _handle_t3_thread(self):
+        """Bind this session to its T3 Code thread (companion-driven)."""
+        if _event_loop is None:
+            self._json_response(500, {"error": "server_not_ready"})
+            return
+
+        params = self._read_json_body()
+        if params is None:
+            return
+
+        thread_id = params.get("thread_id")
+        if not thread_id:
+            self._json_response(400, {"error": "missing_thread_id"})
+            return
+
+        future = asyncio.run_coroutine_threadsafe(set_thread(thread_id), _event_loop)
+        try:
+            result = future.result(timeout=15)
+            self._json_response(200, result)
+        except Exception as e:
+            self._json_response(500, {"error": "thread_bind_failed", "message": str(e)})
 
     def _handle_stop(self):
         """Stop playback and cancel active listen."""
@@ -640,6 +692,78 @@ def _play_ready_sound():
         logger.debug(f"Ready sound failed: {e}")
 
 
+# ─── Voice floor (cross-session audio arbitration) ─────────────────────────────
+
+def _floor_enabled() -> bool:
+    """Return True if cross-session floor arbitration is active."""
+    return (
+        _voice_floor is not None
+        and _config is not None
+        and bool(getattr(_config.coordination, "enabled", True))
+    )
+
+
+def _floor_wait_timeout(default: float) -> float:
+    """Return the configured floor wait, falling back to default on bad config."""
+    if _config is None:
+        return default
+    try:
+        return float(_config.coordination.floor_wait)
+    except (TypeError, ValueError, AttributeError):
+        return default
+
+
+def _session_display_name() -> str:
+    """Return this session's name for floor holder reporting."""
+    return (_session_info or {}).get("name") or "VoiceSmith"
+
+
+def _floor_busy_response(exc: FloorBusyError) -> dict:
+    """Build a structured floor_busy error identifying the current holder."""
+    holder = exc.holder or {}
+    held_by = holder.get("name") or f"session pid {holder.get('pid')}"
+    purpose = holder.get("purpose") or "audio"
+    held_for = ""
+    if holder.get("acquired_at"):
+        held_for = f" for {round(time.time() - holder['acquired_at'], 1)}s"
+    return {
+        "success": False,
+        "error": "floor_busy",
+        "held_by": holder,
+        "message": (
+            f"The audio channel is in use by {held_by} ({purpose}{held_for}). "
+            f"Wait a few seconds and retry, or continue in text."
+        ),
+    }
+
+
+def _floor_status() -> dict:
+    """Current floor holder for status reporting (menu bar, agents)."""
+    if _voice_floor is None:
+        return {"held": False}
+    holder = _voice_floor.holder_info()
+    if holder is None:
+        return {"held": False}
+    return {"held": True, **holder}
+
+
+def _engine_service_status() -> dict:
+    """Report shared engine service state (never spawns it)."""
+    if _config is None or not getattr(_config.engine, "enabled", False):
+        return {"enabled": False}
+    try:
+        from engine_client import service_status
+        return {"enabled": True, **service_status()}
+    except Exception:
+        return {"enabled": True, "running": False}
+
+
+def _report_floor_phase(phase: str) -> None:
+    """Bridge SpeechQueue's per-chunk phases to the floor sidecar."""
+    if _voice_floor is not None:
+        _voice_floor.set_phase(phase)
+
+
 # ─── MCP Tools ────────────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -684,6 +808,30 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
 
     voice_id, auto_assigned = _registry.get_voice(name)
 
+    if not block:
+        # Fire-and-forget: schedule a background task that acquires the
+        # voice floor itself, so queued speech never overlaps another
+        # session's playback or an open mic.
+        asyncio.create_task(_speak_background(text, voice_id, speed))
+        return {
+            "success": True,
+            "voice": voice_id,
+            "auto_assigned": auto_assigned,
+            "queued": True,
+        }
+
+    # Cross-session floor: serialize against other sessions' speak/listen.
+    # purpose "synthesizing": nothing is audible yet — SpeechQueue refines
+    # to "speak" at actual playback of each chunk.
+    if _floor_enabled():
+        try:
+            await _voice_floor.acquire(
+                "synthesizing", _session_display_name(),
+                wait_timeout=_floor_wait_timeout(20.0),
+            )
+        except FloorBusyError as e:
+            return _floor_busy_response(e)
+
     # Pause wake listener during TTS to prevent it hearing our own speech
     wake_was_listening = _wake_listener is not None and _wake_listener.is_listening
     if wake_was_listening and block:
@@ -691,14 +839,6 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
 
     try:
         result = await _speech_queue.speak(text, voice_id, speed, block)
-
-        if not block:
-            return {
-                "success": result.success,
-                "voice": voice_id,
-                "auto_assigned": auto_assigned,
-                "queued": True,
-            }
 
         response = {
             "success": result.success,
@@ -717,12 +857,42 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
     except Exception as e:
         logger.error(f"speak failed: {e}")
         response = {"success": False, "error": "speak_failed", "message": str(e)}
-
-    # Resume wake listener after TTS
-    if wake_was_listening and block and _wake_listener is not None:
-        _wake_listener.reclaim_mic()
+    finally:
+        # Resume wake listener after TTS (after floor release, so the wake
+        # loop doesn't open the mic against a floor we still hold)
+        if _floor_enabled():
+            _voice_floor.release()
+        if wake_was_listening and block and _wake_listener is not None:
+            _wake_listener.reclaim_mic()
 
     return response
+
+
+async def _speak_background(text: str, voice_id: str, speed: float) -> None:
+    """Fire-and-forget speak that queues politely on the voice floor.
+
+    Used by speak(block=False). Unlike the blocking path, a busy floor
+    beyond the wait timeout causes the utterance to be dropped (logged)
+    rather than surfaced, since the caller already got a "queued" response.
+    """
+    if _floor_enabled():
+        try:
+            await _voice_floor.acquire(
+                "synthesizing", _session_display_name(),
+                wait_timeout=max(_floor_wait_timeout(20.0), 60.0),
+            )
+        except FloorBusyError:
+            logger.warning("Background speak dropped — voice floor stayed busy")
+            return
+    try:
+        await _speech_queue.speak(text, voice_id, speed, block=True)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.error(f"Background speak failed: {e}")
+    finally:
+        if _floor_enabled():
+            _voice_floor.release()
 
 
 @mcp.tool()
@@ -848,6 +1018,19 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
     if _listen_active:
         return {"success": False, "error": "mic_busy", "message": "Another listen call is in progress"}
 
+    # Cross-session floor: don't open the mic while another session is
+    # speaking (it would record their TTS as user speech) or listening.
+    # purpose "processing" covers the pre-mic window (wake yield, duck);
+    # it flips to "listen" the moment the mic is actually live.
+    if _floor_enabled():
+        try:
+            await _voice_floor.acquire(
+                "processing", _session_display_name(),
+                wait_timeout=min(_floor_wait_timeout(20.0), timeout + 5.0),
+            )
+        except FloorBusyError as e:
+            return _floor_busy_response(e)
+
     # Yield mic from wake listener if active
     if _wake_listener is not None and _wake_listener.is_listening:
         _wake_listener.yield_mic()
@@ -872,7 +1055,15 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
 
         # Play the ready sound AFTER the mic is live (via on_ready callback)
         # so the user doesn't start speaking into a dead mic.
-        ready_cb = _play_ready_sound if prompt != "push-to-talk" else None
+        # The same callback marks the exact mic-open moment on the floor
+        # sidecar ("listen"), for status-light companions.
+        def _on_mic_ready():
+            if _floor_enabled():
+                _voice_floor.set_phase("listen")
+            if prompt != "push-to-talk":
+                _play_ready_sound()
+
+        ready_cb = _on_mic_ready
 
         # Record audio with VAD
         audio = await _mic_capture.record(
@@ -890,6 +1081,10 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
             return {"success": False, "error": "timeout", "message": "No speech detected within timeout"}
 
         recording_ms = (time.perf_counter() - start) * 1000
+
+        # Mic closed, Whisper about to run — refine the floor phase.
+        if _floor_enabled():
+            _voice_floor.set_phase("transcribing")
 
         # Transcribe
         result = await loop.run_in_executor(
@@ -913,6 +1108,10 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
             asyncio.create_task(_deferred_unduck(paused_apps))
         _listen_active = False
         _listen_cancel_event = None
+        if _floor_enabled():
+            # Release the floor before reclaiming the mic for the wake
+            # listener, so the wake loop reopens against a free floor.
+            _voice_floor.release()
         # Reclaim mic for wake listener
         if _wake_listener is not None:
             _wake_listener.reclaim_mic()
@@ -936,6 +1135,20 @@ async def speak_then_listen(
         silence_threshold: Seconds of silence before stopping (default 1.5).
     """
     global _suppress_duck
+
+    # Acquire the voice floor ONCE for the entire speak→listen operation.
+    # Inner speak()/listen() calls re-enter (same task), so no other
+    # session can start talking between our question and our open mic —
+    # the gap that previously let a sibling session barge in.
+    if _floor_enabled():
+        try:
+            await _voice_floor.acquire(
+                "speak_then_listen", _session_display_name(),
+                wait_timeout=_floor_wait_timeout(20.0),
+            )
+        except FloorBusyError as e:
+            return {"speak": _floor_busy_response(e),
+                    "listen": {"success": False, "error": "skipped"}}
 
     # Duck once for the entire speak+listen operation to avoid a
     # brief unduck gap between speak finishing and listen starting.
@@ -977,6 +1190,8 @@ async def speak_then_listen(
             _speech_queue._duck_media = saved_queue_duck
         if paused_apps:
             asyncio.create_task(_deferred_unduck(paused_apps))
+        if _floor_enabled():
+            _voice_floor.release()
 
 
 @mcp.tool()
@@ -1152,6 +1367,54 @@ async def stop() -> dict:
     }
 
 
+@mcp.tool()
+async def set_thread(thread_id: str) -> dict:
+    """Bind this VoiceSmith session to its T3 Code conversation thread.
+
+    Call once, early, with YOUR OWN T3 thread id (your coordinator or
+    companion knows it). Maps this voice session to its conversation so
+    hardware companions (Codex Micro) and the menu bar can show which
+    thread is speaking or listening. Idempotent; also repairs a registry
+    entry that was wiped by an old cleanup pass.
+    """
+    global _session_info
+    _capture_event_loop()
+
+    if not thread_id or not isinstance(thread_id, str):
+        return {"success": False, "error": "missing_thread_id"}
+
+    from session_registry import set_session_thread_id
+
+    fallback = None
+    if set_session_thread_id(os.getpid(), thread_id) is None:
+        # Our registry entry is gone (pre-fix cleanup passes wiped the
+        # registry while sessions ran). Re-create it from what we know.
+        if _session_info is None:
+            return {"success": False, "error": "session_not_found",
+                    "message": "No session metadata to register against."}
+        fallback = {
+            "name": _session_info.get("name"),
+            "voice": _session_info.get("voice"),
+            "port": _session_info.get("port"),
+            "pid": os.getpid(),
+            "session_id": _session_info.get("session_id"),
+            "tmux_session": _session_info.get("tmux_session"),
+            "started_at": _session_info.get("started_at"),
+        }
+
+    updated = set_session_thread_id(os.getpid(), thread_id, fallback_session=fallback)
+    if updated is None:
+        return {"success": False, "error": "thread_bind_failed"}
+
+    _session_info = updated
+    # Stamp the thread id onto every floor sidecar write from now on, so
+    # companions see it on the very next hold without a restart.
+    if _voice_floor is not None:
+        _voice_floor.set_default_extra({"thread_id": thread_id})
+    logger.info(f"Session bound to T3 thread {thread_id}")
+    return {"success": True, "thread_id": thread_id, "name": updated.get("name")}
+
+
 @mcp.tool(name="mute")
 async def mute_tool() -> dict:
     """Temporarily silence all voice output. Speak still returns success but no audio plays."""
@@ -1222,6 +1485,8 @@ async def status() -> dict:
         "registry_size": _registry.size if _registry else 0,
         "queue_depth": _speech_queue.depth if _speech_queue else 0,
         "session": _session_info,
+        "floor": _floor_status(),
+        "engine_service": _engine_service_status(),
         "wake_word": {
             "enabled": _config.wake_word.enabled if _config else False,
             "listening": _wake_listener.is_listening if _wake_listener else False,
@@ -1295,7 +1560,7 @@ def _run_smoke_test():
 
 def main():
     """Entry point."""
-    global _config, _listen_cancel_event, _session_info, _event_loop
+    global _config, _listen_cancel_event, _session_info, _event_loop, _voice_floor
 
     if "--test" in sys.argv:
         _run_smoke_test()
@@ -1353,6 +1618,27 @@ def main():
         base_port=_config.http_port,
     )
 
+    # Attach this session to its T3 Code thread (injected by the harness
+    # into every MCP server process it spawns). Lets hardware companions
+    # map the voice floor holder back to the conversation that's talking
+    # or listening.
+    t3_thread_id = os.environ.get("T3CODE_THREAD_ID")
+    if t3_thread_id:
+        from session_registry import set_session_thread_id
+        updated = set_session_thread_id(os.getpid(), t3_thread_id)
+        if updated:
+            _session_info = updated
+            logger.info(f"Session linked to T3 thread {t3_thread_id}")
+
+    # Cross-session voice floor (speaker + mic arbitration)
+    if _config.coordination.enabled:
+        _voice_floor = get_default_floor()
+        _voice_floor.set_default_extra({"thread_id": t3_thread_id} if t3_thread_id else {})
+        logger.info(
+            f"Voice floor enabled (wait up to {_config.coordination.floor_wait}s "
+            f"for other sessions' audio)"
+        )
+
     # Start HTTP listener for push-to-talk
     _start_http_listener(_session_info["port"])
 
@@ -1409,12 +1695,27 @@ def _start_preheat_intro():
         # Re-read _session_info in case the hook updated it during the sleep
         intro_name = _session_info.get("name", default_name) if _session_info else default_name
         intro_voice = _session_info.get("voice", default_voice) if _session_info else default_voice
+
+        # Take the voice floor so the intro doesn't talk over another
+        # session's speech or open mic. Skip the intro if the floor stays
+        # busy — an intro is nice-to-have, never worth queueing for.
+        if _floor_enabled():
+            try:
+                _voice_floor.acquire_sync("synthesizing", intro_name, wait_timeout=2.0)
+            except FloorBusyError:
+                logger.info("Skipping preheat intro — voice floor busy")
+                return
         try:
             result = _tts_engine.synthesize(f"{intro_name} here, ready to go.", intro_voice, 1.0)
+            if _floor_enabled():
+                _voice_floor.set_phase("speak")  # actual audible playback
             _audio_player.play(result.samples, result.sample_rate)
             logger.info(f"Preheat intro spoken: {intro_name}")
         except Exception as e:
             logger.warning(f"Preheat intro failed: {e}")
+        finally:
+            if _floor_enabled():
+                _voice_floor.release()
 
     thread = threading.Thread(target=_intro, daemon=True)
     thread.start()

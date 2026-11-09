@@ -31,11 +31,40 @@ def _sessions_path() -> Path:
     return Path.home() / ".local" / "share" / "voicesmith-mcp" / SESSIONS_FILE_NAME
 
 
+def _ps_pid_exists(pid: int) -> bool:
+    """Check process existence via ps. False only on CONFIRMED absence.
+
+    A ps that errors entirely (sandbox, load) returns True — an unknown
+    probe must never orphan a session.
+    """
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "pid=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return True
+        if result.returncode == 1:
+            return False  # ps ran and found nothing → confirmed dead
+        return True  # ps itself failed → unknown, keep the session
+    except Exception:
+        return True
+
+
 def _pid_alive(pid: int) -> bool:
-    """Check if a process is alive."""
+    """Check if a process is alive.
+
+    os.kill(pid, 0) is the fast path, but sandboxed agent processes
+    (T3 Code's seatbelt runs) get EPERM when signaling OTHER sessions'
+    processes. Treating that as "dead" made every cleanup pass wipe the
+    whole registry while the sessions were alive. On EPERM, fall back
+    to ps.
+    """
     try:
         os.kill(pid, 0)
         return True
+    except PermissionError:
+        return _ps_pid_exists(pid)
     except (OSError, ProcessLookupError):
         return False
 
@@ -60,15 +89,22 @@ def _write_sessions(path: Path, sessions: list[dict]) -> None:
 
 
 def _get_ppid(pid: int) -> int:
-    """Get the parent PID of a process. Returns 0 on failure."""
+    """Get the parent PID of a process. Returns -1 on failure.
+
+    Failure must never be interpreted as orphaning: a transient `ps`
+    hiccup (timeout, heavy load) would otherwise mass-SIGTERM healthy
+    sessions and wipe the registry.
+    """
     try:
         result = subprocess.run(
             ["ps", "-o", "ppid=", "-p", str(pid)],
             capture_output=True, text=True, timeout=2,
         )
-        return int(result.stdout.strip()) if result.returncode == 0 else 0
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip())
     except Exception:
-        return 0
+        pass
+    return -1
 
 
 def _session_healthy(session: dict) -> bool:
@@ -76,9 +112,13 @@ def _session_healthy(session: dict) -> bool:
 
     Checks:
     1. PID alive — catches crashed server processes
-    2. Parent PID alive — if the parent (Claude Code, Cursor, etc.) died,
-       the server is orphaned. On macOS/Linux, orphaned processes get
+    2. Parent PID — if the parent (Claude Code, Cursor, etc.) died, the
+       server is orphaned. On macOS/Linux, orphaned processes get
        reparented to PID 1 (launchd/init).
+
+    Only a CONFIRMED reparent to PID 1 proves orphaning. An unknown
+    parent (-1: `ps` failed transiently) keeps the session — a failed
+    probe must never orphan-kill a healthy server.
     """
     pid = session.get("pid", 0)
     if not _pid_alive(pid):
@@ -90,12 +130,13 @@ def _session_healthy(session: dict) -> bool:
 
     # Check if the server's parent process is still alive.
     # If parent is PID 1 (launchd/init), the IDE exited and the server
-    # was reparented — it's orphaned.
+    # was reparented — it's orphaned. ppid == -1 means the probe failed
+    # (keep the session); a real parent pid means the IDE still runs.
     ppid = _get_ppid(pid)
-    if ppid <= 1:
+    if ppid == 1:
         logger.info(
             f"Session '{session.get('name')}' (pid {pid}) orphaned "
-            f"(parent pid {ppid}) — treating as stale"
+            f"(reparented to launchd) — treating as stale"
         )
         try:
             os.kill(pid, signal.SIGTERM)
@@ -377,6 +418,61 @@ def update_session_id(pid: int, session_id: str) -> Optional[dict]:
             return dict(our_entry)
     except OSError as e:
         logger.warning(f"Failed to update session_id: {e}")
+        return None
+
+
+def set_session_thread_id(
+    pid: int,
+    thread_id: str,
+    fallback_session: Optional[dict] = None,
+) -> Optional[dict]:
+    """Attach a T3 Code thread id to a session's registry entry.
+
+    The T3 harness injects T3CODE_THREAD_ID into every MCP server process
+    it spawns; the server stamps it here at startup so hardware companions
+    can map a VoiceSmith session (and the voice floor holder) to its
+    conversation.
+
+    If the PID isn't registered (its entry was wiped by a pre-fix cleanup
+    pass), a `fallback_session` dict (name/voice/port/pid/...) is appended
+    as a fresh entry with the thread id set — used by the set_thread tool
+    so a bind survives even while the registry is recovering.
+
+    Returns the updated session dict, or None if the PID isn't registered
+    and no fallback was given.
+    """
+    path = _sessions_path()
+
+    def _entry_with_tid(entry: dict) -> dict:
+        out = dict(entry)
+        out["t3_thread_id"] = thread_id
+        return out
+
+    def _try_write() -> Optional[dict]:
+        # Caller must hold flock.
+        sessions = _read_sessions(path)
+        for s in sessions:
+            if s.get("pid") == pid:
+                s["t3_thread_id"] = thread_id
+                _write_sessions(path, sessions)
+                return dict(s)
+        if fallback_session is not None:
+            sessions.append(_entry_with_tid(fallback_session))
+            _write_sessions(path, sessions)
+            return _entry_with_tid(fallback_session)
+        return None
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Touch the file so flock has something to lock even if it was wiped
+    if not path.exists():
+        _write_sessions(path, [])
+
+    try:
+        with open(path, "r+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            return _try_write()
+    except OSError as e:
+        logger.warning(f"Failed to set t3_thread_id: {e}")
         return None
 
 

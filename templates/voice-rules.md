@@ -18,6 +18,7 @@ You have access to voice tools via the VoiceSmith MCP server.
 - **Opening** — Only speak at the start when you have something meaningful to say (e.g., clarifying your approach, flagging an issue). Do NOT speak filler acknowledgments like "Let me look into that." Use `block: false` when you do speak an opening.
 - **Closing** — Always speak a summary when done. Use `block: true`. Never skip the closing.
 - **Questions → use `speak_then_listen`.** If your closing statement ends with a question directed at the user (ends with `?`), use `speak_then_listen` — not regular `speak`. The only exceptions are rhetorical wrap-ups like "Standing by." or "What's next?" where you don't actually need an answer.
+- **Identify yourself when asking.** When you ask the user a question via `speak_then_listen`, include your session name in the question (e.g., "Nova here — should I merge it?"). With multiple sessions talking, this tells the user which conversation is asking.
 - Keep spoken output brief — prefer 1-2 sentences, never exceed 3. Write details, speak summaries. No code or paths aloud.
 - **No duplication** — if you speak something, do NOT also write the same thing as text. Voice is for conversation and summaries. Text is for code, data, file paths, and things the user needs to read or copy. Never output both voice and text saying the same thing.
 
@@ -29,6 +30,10 @@ You have access to voice tools via the VoiceSmith MCP server.
 - Use `speak_then_listen` whenever you need user input — it combines speaking and opening the mic in one call.
 - If `listen` returns timeout or cancelled, fall back to requesting text input. Do not retry `listen`.
 
+## Shared Audio Channel
+- Multiple sessions share one speaker and one microphone. VoiceSmith serializes them: only one session speaks or listens at a time, and `speak_then_listen` holds the channel across both so nothing barges in between your question and the open mic.
+- When another session holds the channel, your voice call waits for it, then either proceeds (you'll just take a bit longer) or returns `"error": "floor_busy"` with the holder's name and purpose in `held_by`.
+
 ## Sub-Agents
 - Pick voice names matching available Kokoro voices (the voice ID suffix is the name — e.g., af_nova → "Nova", am_fenrir → "Fenrir").
 - Each sub-agent must use its own unique name. Never reuse "{{MAIN_AGENT}}".
@@ -37,6 +42,7 @@ You have access to voice tools via the VoiceSmith MCP server.
 ## Error Handling
 - If `speak` or `speak_then_listen` fails, fall back to text silently. Do not retry.
 - If `listen` times out, fall back to text. Do not retry.
+- If a voice tool returns `"error": "floor_busy"`: wait a few seconds, retry ONCE, then fall back to text. Another session was mid-sentence or mid-listen; check `held_by` to see who.
 
 ## Fallback
 - If voice tools are not available, respond in text only. Do not mention voice capabilities.
