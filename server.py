@@ -581,8 +581,21 @@ def _start_http_listener(port: int):
 
 # ─── Shutdown ─────────────────────────────────────────────────────────────────
 
+_shutdown_lock = threading.Lock()
+_shutdown_done = False
+
+
 def _shutdown():
-    """Graceful shutdown: stop playback, save registry, unregister session."""
+    """Graceful shutdown: stop playback, save registry, unregister session.
+
+    Idempotent and thread-safe: the signal handler, the parent watchdog thread,
+    the stdin-EOF path, and atexit can all reach it, and only the first runs.
+    """
+    global _shutdown_done
+    with _shutdown_lock:
+        if _shutdown_done:
+            return
+        _shutdown_done = True
     logger.info("Shutting down...")
 
     if _speech_queue is not None:
@@ -1290,6 +1303,7 @@ def main():
 
     # Load configuration
     _config = load_config()
+    _sweep_stale_config_temps(get_config_path().parent)
 
     # Set log level
     log_level = getattr(__import__("logging"), _config.log_level.upper(), None)
@@ -1312,7 +1326,7 @@ def main():
         logger.error("Both TTS and STT failed to load. Cannot start server.")
         logger.error(f"TTS model path: {_config.tts.model_path}")
         logger.error(f"STT model size: {_config.stt.model_size}")
-        sys.exit(1)
+        _exit_process(1)  # not sys.exit: engine thread pools are already running
 
     if not tts_ok:
         logger.warning("TTS failed to load. Running with STT only.")
@@ -1344,11 +1358,13 @@ def main():
 
     # Register shutdown handlers
     def handle_signal(signum, frame):
-        _shutdown()
-        os._exit(0)  # bypass Py_FinalizeEx to avoid SIGABRT from native thread pools
+        _exit_process(0)
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGHUP, handle_signal)  # client terminal closed
+
+    _start_parent_watchdog()
 
     import atexit
     atexit.register(_shutdown)
@@ -1448,7 +1464,82 @@ def _start_periodic_save_thread():
     logger.debug("Periodic save thread started")
 
 
+def _exit_process(code: int) -> None:
+    """Shut down and exit without Py_FinalizeEx.
+
+    Interpreter finalization aborts (SIGABRT, "could not acquire lock for
+    <stdout>") while onnxruntime/ctranslate2 native thread pools are alive, so
+    every exit path must end in os._exit rather than sys.exit or a normal return.
+    """
+    try:
+        _shutdown()
+    finally:
+        for handler in logger.handlers:
+            try:
+                handler.flush()
+            except Exception:
+                pass
+        os._exit(code)
+
+
+PARENT_WATCHDOG_INTERVAL = 2.0  # seconds
+
+
+def _start_parent_watchdog() -> None:
+    """Exit when the process that launched us goes away.
+
+    The C launcher forwards SIGTERM/SIGINT, but if it (or the MCP client) is
+    SIGKILLed, this process is reparented to launchd and keeps the TTS/STT
+    models resident indefinitely. Orphans pile up across client restarts and
+    memory grows until reboot. Polling getppid() catches every way the parent
+    can die; stdin EOF alone does not if the pipe is inherited elsewhere.
+    """
+    original_ppid = os.getppid()
+    if original_ppid == 1:
+        return  # started directly by launchd; nothing to watch
+
+    def _watch():
+        while True:
+            time.sleep(PARENT_WATCHDOG_INTERVAL)
+            if os.getppid() != original_ppid:
+                logger.warning(f"Parent process {original_ppid} exited; shutting down orphaned server")
+                _exit_process(0)
+
+    threading.Thread(target=_watch, name="parent-watchdog", daemon=True).start()
+
+
+STALE_TEMP_AGE = 300  # seconds; older than any in-flight atomic write
+
+
+def _sweep_stale_config_temps(config_dir: Path) -> None:
+    """Remove .config-*.tmp files orphaned by atomic writes cut short.
+
+    save_config/VoiceRegistry.save create the temp file before writing; a kill
+    or os._exit in between leaves an empty file behind, one per occurrence.
+    Only files older than STALE_TEMP_AGE are removed, so a concurrent session's
+    in-progress write is never touched.
+    """
+    cutoff = time.time() - STALE_TEMP_AGE
+    removed = 0
+    for tmp in config_dir.glob(".config-*.tmp"):
+        try:
+            if tmp.stat().st_mtime < cutoff:
+                tmp.unlink()
+                removed += 1
+        except OSError:
+            pass
+    if removed:
+        logger.info(f"Removed {removed} stale config temp file(s)")
+
+
 if __name__ == "__main__":
-    main()
-    _shutdown()
-    os._exit(0)  # stdin-EOF path: bypass Py_FinalizeEx same as signal handler
+    exit_code = 0
+    try:
+        main()  # returns on stdin EOF
+    except BaseException as e:  # includes SystemExit from any sys.exit()
+        if isinstance(e, SystemExit):
+            exit_code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        else:
+            logger.exception("Server crashed")
+            exit_code = 1
+    _exit_process(exit_code)

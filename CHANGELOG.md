@@ -7,6 +7,14 @@ All notable changes to VoiceSmith MCP are documented here.
 ### Added
 - **`export_speech` tool:** Synthesize speech and write it to an audio file (e.g. WAV) instead of playing it. Same name/voice resolution and `speed` as `speak`; returns the output path, `duration_ms`, `synthesis_ms`, and `sample_rate`. Useful for building videos and screencasts, archiving narration, or batch TTS. Creates parent directories if missing.
 
+### Fixed
+- **Orphaned servers leaking memory:** If the launcher or MCP client was SIGKILLed, the Python server was reparented to launchd and kept its TTS/STT models resident (~2.3 GB each) indefinitely, so memory grew until reboot. A parent watchdog now exits the server within ~2 s of its parent disappearing.
+- **Remaining SIGABRT-on-exit paths:** Every exit (stdin EOF, SIGTERM/SIGINT/SIGHUP, startup failure, any `sys.exit`/uncaught exception) now ends in `os._exit` after a single idempotent `_shutdown()`, so interpreter finalization never races the onnxruntime/ctranslate2 thread pools.
+- **`.config-*.tmp` buildup:** Atomic config writes interrupted by a kill left empty temp files beside `config.json` (hundreds over months). Stale ones (>5 min old) are removed at startup.
+
+### Changed
+- **Audio service `ThrottleInterval`:** 0 → 2 s, so a crash-at-startup loop can't spin the CPU while still restarting promptly.
+
 ## [1.0.18] - 2026-03-05
 
 ### Added
