@@ -5,6 +5,8 @@ All notable changes to VoiceSmith MCP are documented here.
 ## [Unreleased]
 
 ### Fixed
+- **Volume slider "did nothing":** the menu bar's 1s poll overwrote the slider binding from state.json *while the user was dragging*, snapping it back to the old value before the release ever wrote the new one. Poll now skips the volume binding during a drag.
+- **Live volume dead on slow audio devices:** the mpv IPC connection gave up after 1s, but mpv creates its socket only after audio-device init — a USB device (e.g. the B600 video bar) can exceed that window, silently disabling mid-playback volume. The connection is now established lazily inside the playback poll loop, retrying until the socket appears or playback ends.
 - **"Mute All" didn't mute all:** the menu bar's Mute All POSTed to a snapshot of live sessions, so anything spawned after the click — sub-agents, new threads — kept talking. Mute-all is now a shared global flag (`state.json`) that every session checks on every audio operation, including sessions spawned after the flag was set. A global mute also suppresses listening, wake word detection, ready sounds, and preheat intros. Per-session mute is unchanged and still available.
 
 ### Added

@@ -218,7 +218,6 @@ class AudioPlayer:
             sf.write(tmp_path, play_samples, sample_rate)
 
             cmd = self._build_command(tmp_path)
-            ipc_sock = None
             if use_mpv:
                 # Volume knob + IPC for live adjustments, inserted before
                 # the file path (mpv wants options first).
@@ -234,7 +233,6 @@ class AudioPlayer:
                     f"--input-ipc-server={sock_path}",
                     cmd[-1],
                 ]
-                ipc_sock = sock_path
             logger.debug(f"Playing audio: {' '.join(cmd)}")
 
             # Cross-session audio lock: prevents overlapping playback
@@ -248,19 +246,16 @@ class AudioPlayer:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                conn = self._open_mpv_ipc(ipc_sock) if ipc_sock else None
                 stopped = False
                 returncode = 0
                 try:
-                    stopped = self._wait_with_controls(conn)
+                    # Live-control loop; for mpv it lazily connects to the
+                    # IPC socket (mpv creates it AFTER audio-device init —
+                    # slow USB devices can exceed any fixed window).
+                    stopped = self._wait_with_controls(sock_path if use_mpv else None)
                 finally:
                     returncode = self._process.returncode if self._process is not None else 0
                     duration_ms = (time.perf_counter() - start) * 1000
-                    if conn is not None:
-                        try:
-                            conn.close()
-                        except OSError:
-                            pass
                     self._process = None
 
             # Lock released when lock_file closes
@@ -308,62 +303,75 @@ class AudioPlayer:
                 return 1.0
         return 1.0
 
-    def _wait_with_controls(self, ipc_conn) -> bool:
+    def _wait_with_controls(self, ipc) -> bool:
         """Block until the player exits, reacting to live state changes.
 
         Polls ~10x/s: if the mute provider turns on, kills the player
         immediately (returns True = stopped). If the volume provider moved,
         pushes the new level to mpv over IPC. Returns False for normal exit.
+
+        `ipc` is either an already-open connection object (tests) or an
+        IPC socket PATH to lazily connect to. mpv creates the socket AFTER
+        audio-device init — a slow USB device can exceed any fixed connect
+        window — so we retry every poll until playback ends.
         """
         assert self._process is not None
-        last_volume = None  # lazily seeded from the initial level
-        while True:
-            if self._process.poll() is not None:
-                return False
-            if self._mute_provider is not None:
-                try:
-                    muted = bool(self._mute_provider())
-                except Exception:
-                    muted = False
-                if muted:
-                    logger.info("Mute engaged mid-playback — stopping audio")
+        sock_path = ipc if isinstance(ipc, str) else None
+        conn = None if sock_path else ipc
+        last_volume = None  # lazily seeded from the first successful push
+        try:
+            while True:
+                if self._process.poll() is not None:
+                    return False
+                if self._mute_provider is not None:
                     try:
-                        self._process.kill()
-                        self._process.wait(timeout=2)
+                        muted = bool(self._mute_provider())
                     except Exception:
-                        pass
-                    return True
-            if ipc_conn is not None and self._volume_provider is not None:
+                        muted = False
+                    if muted:
+                        logger.info("Mute engaged mid-playback — stopping audio")
+                        try:
+                            self._process.kill()
+                            self._process.wait(timeout=2)
+                        except Exception:
+                            pass
+                        return True
+                if self._volume_provider is not None and (conn is not None or sock_path):
+                    if conn is None:
+                        conn = self._try_connect_ipc(sock_path)
+                    if conn is not None:
+                        try:
+                            v = min(1.0, max(0.0, float(self._volume_provider())))
+                        except Exception:
+                            v = None
+                        if v is not None:
+                            if last_volume is None or abs(v - last_volume) >= 0.01:
+                                if self._mpv_set_volume(conn, v):
+                                    last_volume = v
+                time.sleep(0.1)
+        finally:
+            if conn is not None:
                 try:
-                    v = min(1.0, max(0.0, float(self._volume_provider())))
-                except Exception:
-                    v = None
-                if v is not None:
-                    if last_volume is None or abs(v - last_volume) >= 0.01:
-                        if self._mpv_set_volume(ipc_conn, v):
-                            last_volume = v
-            time.sleep(0.1)
+                    conn.close()
+                except OSError:
+                    pass
 
     @staticmethod
-    def _open_mpv_ipc(sock_path: str | None):
-        """Connect to mpv's IPC socket (mpv creates it shortly after start)."""
+    def _try_connect_ipc(sock_path: str | None):
+        """Single connect attempt to mpv's IPC socket (None until it's up)."""
         if not sock_path:
             return None
         import socket as socket_mod
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline:
+        try:
+            conn = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+            conn.connect(sock_path)
+            return conn
+        except OSError:
             try:
-                conn = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
-                conn.connect(sock_path)
-                return conn
-            except OSError:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                time.sleep(0.05)
-        logger.debug("mpv IPC socket not available — live volume disabled for this chunk")
-        return None
+                conn.close()
+            except Exception:
+                pass
+            return None
 
     @staticmethod
     def _mpv_set_volume(ipc_conn, volume: float) -> bool:

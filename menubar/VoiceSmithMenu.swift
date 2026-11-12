@@ -234,6 +234,7 @@ class AppState: ObservableObject {
     @Published var isMuted = false          // global mute-all (shared state)
     @Published var muteSubagents = false   // shared: agent-spawned sessions only
     @Published var globalVolume: Double = 1.0
+    @Published var volumeDragging = false   // true while the volume slider is held
     @Published var duckMedia = false
     @Published var nudgeOnTimeout = false
     @Published var currentModelSize = "base"
@@ -370,7 +371,12 @@ class AppState: ObservableObject {
         let gs = readGlobalState()
         isMuted = gs["mute_all"] as? Bool ?? false
         muteSubagents = gs["mute_subagents"] as? Bool ?? false
-        globalVolume = gs["volume"] as? Double ?? 1.0
+        // Never yank the volume binding while the user is mid-drag — the
+        // poll would snap the slider back to the old value before the
+        // release writes the new one.
+        if !volumeDragging {
+            globalVolume = gs["volume"] as? Double ?? 1.0
+        }
         readConfigFallback()
         if currentVoice.isEmpty, let port = selectedPort,
            let s = sessions.first(where: { $0.port == port }) { currentVoice = s.voice }
@@ -1426,7 +1432,10 @@ struct MenuPanel: View {
                         .frame(width: 16)
                         .foregroundColor(.secondary)
                     Slider(value: $state.globalVolume, in: 0...1) { editing in
-                        if !editing { state.setGlobalVolume(state.globalVolume) }
+                        state.volumeDragging = editing
+                        if !editing {
+                            state.setGlobalVolume(state.globalVolume)
+                        }
                     }
                     Text("\(Int(state.globalVolume * 100))%")
                         .font(.system(size: 11, design: .monospaced))

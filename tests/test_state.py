@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -138,14 +139,14 @@ class TestLivePlaybackControl:
         player = self._player()
         proc = FakeProc(exits_after_polls=3)
         player._process = proc
-        assert player._wait_with_controls(ipc_conn=None) is False
+        assert player._wait_with_controls(None) is False
         assert proc.killed is False
 
     def test_mute_engages_midplayback_kills(self):
         player = self._player(mute_provider=lambda: True)
         proc = FakeProc()
         player._process = proc
-        assert player._wait_with_controls(ipc_conn=None) is True
+        assert player._wait_with_controls(None) is True
         assert proc.killed is True  # silenced within one poll (~150ms)
 
     def test_mute_flips_on_after_a_few_polls(self):
@@ -156,7 +157,7 @@ class TestLivePlaybackControl:
         player = self._player(mute_provider=mute)
         proc = FakeProc()
         player._process = proc
-        assert player._wait_with_controls(ipc_conn=None) is True
+        assert player._wait_with_controls(None) is True
         assert proc.killed is True
 
     def test_volume_change_detected_and_sent(self):
@@ -179,7 +180,7 @@ class TestLivePlaybackControl:
         t = threading.Thread(target=reader, daemon=True)
         t.start()
 
-        assert player._wait_with_controls(ipc_conn=writer) is False
+        assert player._wait_with_controls(writer) is False
         writer.close()
         listener.close()
         t.join(timeout=1)
@@ -191,7 +192,51 @@ class TestLivePlaybackControl:
         player = self._player(mute_provider=broken)
         proc = FakeProc(exits_after_polls=3)
         player._process = proc
-        assert player._wait_with_controls(ipc_conn=None) is False  # playback completes
+        assert player._wait_with_controls(None) is False  # playback completes
+        assert proc.killed is False
+
+    def test_lazy_socket_path_connects_when_it_appears(self):
+        """Volume pushes begin as soon as mpv finally creates its IPC socket."""
+        import socket as socket_mod
+        import threading
+        sock_path = "/tmp/voicesmith-test-lazy-ipc.sock"
+        try:
+            os.unlink(sock_path)
+        except OSError:
+            pass
+
+        player = self._player(volume_provider=lambda: 0.4)
+        proc = FakeProc(exits_after_polls=25)  # ~2.5s of playback
+        player._process = proc
+
+        listener = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+        received = []
+        def late_bind():
+            time.sleep(0.3)  # mpv "creates" the socket late (USB device init)
+            listener.bind(sock_path)
+            listener.listen(1)
+            conn, _ = listener.accept()
+            while True:
+                data = conn.recv(1024)
+                if not data:
+                    break
+                received.append(data.decode())
+            conn.close()
+        t = threading.Thread(target=late_bind, daemon=True)
+        t.start()
+
+        # Socket "appears" 0.5s in — the loop must pick it up after failures
+        assert player._wait_with_controls(ipc=sock_path) is False
+        listener.close()
+        t.join(timeout=2)
+        assert any("set volume 40" in r for r in received), received
+
+    def test_lazy_socket_path_never_connecting_is_harmless(self):
+        player = self._player(volume_provider=lambda: 0.4)
+        proc = FakeProc(exits_after_polls=5)
+        player._process = proc
+        # Path that never exists — loop retries quietly until playback ends
+        assert player._wait_with_controls(ipc="/tmp/definitely-not-here.sock") is False
         assert proc.killed is False
 
 
