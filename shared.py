@@ -222,6 +222,7 @@ class PlaybackResult:
     success: bool
     duration_ms: float = 0.0
     error: Optional[str] = None
+    stopped: bool = False  # Killed mid-playback (e.g. Mute All engaged)
 
 
 @dataclass
@@ -234,6 +235,7 @@ class SpeakResult:
     synthesis_ms: float = 0.0
     queued: bool = False
     error: Optional[str] = None
+    stopped: bool = False  # Aborted mid-utterance (mute engaged during playback)
 
 
 @dataclass

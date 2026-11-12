@@ -20,25 +20,22 @@ class SpeechQueue:
         player: AudioPlayer,
         duck_media: bool = False,
         phase_reporter=None,
-        volume_provider=None,
     ) -> None:
         """Args:
         engine: TTS engine (local KokoroEngine or RemoteTTSEngine).
-        player: AudioPlayer for playback.
+        player: AudioPlayer for playback. The player owns volume and live
+            mute behavior (via its mute/volume providers) — the queue does
+            not plumb gain per chunk.
         duck_media: Whether to duck system media during playback.
         phase_reporter: Optional callable(str) told "synthesizing"/"speak"
             at the actual synthesis/playback boundaries of each chunk, so
             watchers (voice floor sidecar → hardware lights) see real
             audio phases rather than whole-utterance intent.
-        volume_provider: Optional callable() -> float supplying the
-            playback gain (0.0-1.0) per chunk — lets the server apply
-            per-session volume overrides and the shared global volume.
         """
         self._engine = engine
         self._player = player
         self._duck_media = duck_media
         self._phase_reporter = phase_reporter
-        self._volume_provider = volume_provider
         self._queue: asyncio.Queue = asyncio.Queue()
         self._speaking = False
 
@@ -49,15 +46,6 @@ class SpeechQueue:
             self._phase_reporter(phase)
         except Exception:
             pass  # phase reporting is advisory; never break speech
-
-    def _volume(self) -> float:
-        if self._volume_provider is None:
-            return 1.0
-        try:
-            v = float(self._volume_provider())
-        except Exception:
-            return 1.0
-        return min(1.0, max(0.0, v))
 
     async def speak(
         self,
@@ -121,7 +109,6 @@ class SpeechQueue:
                     self._player.play,
                     synthesis_result.samples,
                     synthesis_result.sample_rate,
-                    self._volume(),
                 )
                 total_duration_ms += playback_result.duration_ms
 
@@ -132,6 +119,17 @@ class SpeechQueue:
                         duration_ms=total_duration_ms,
                         synthesis_ms=total_synthesis_ms,
                         error=playback_result.error,
+                    )
+
+                if playback_result.stopped:
+                    # Mute engaged mid-playback — skip any remaining chunks
+                    # rather than playing them into a meeting.
+                    return SpeakResult(
+                        success=True,
+                        voice=voice_id,
+                        duration_ms=total_duration_ms,
+                        synthesis_ms=total_synthesis_ms,
+                        stopped=True,
                     )
 
             return SpeakResult(

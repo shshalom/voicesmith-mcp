@@ -501,6 +501,8 @@ The old menu-bar "Mute All" POSTed to a snapshot of live sessions — anything s
 
 Per-session controls remain: the `mute`/`unmute` tools (session-local), plus a per-session **volume override** (menu bar Session Activity slider, HTTP `POST /session_volume`, or the `set_volume(volume, scope="session")` tool) which wins over the global value; clearing it falls back to global. `set_volume(volume, scope="all")` sets the shared default from any agent.
 
+**Changes take effect on the audio that is currently playing**, not just the next utterance. During playback the player polls the shared state ~10x/s: a mute engaging kills the player process within ~150 ms (a mute caught before a chunk starts produces *zero* leaked audio via a pre-spawn check), and volume changes are pushed to mpv live over its IPC socket — so the menu bar's Mute All silences an agent mid-sentence and the volume slider bends the utterance that's already playing. mpv is required for live volume (afplay/aplay fall back to per-chunk gain, mute-kill still live). A mute during `listen` closes the mic within ~0.5 s via a watchdog on the cancel event, and a stopped utterance reports `"stopped": true` to the calling agent.
+
 A session is effectively muted when **any** of: its own mute, `mute_all`, or (`mute_subagents` ∧ it is a subagent). `speak` then returns success-silent (agents fall back to text), `listen` returns a `muted` error, the preheat intro and ready sounds are skipped, and the wake listener pauses. `status` reports all of it under `mute` and `volume`.
 
 ---

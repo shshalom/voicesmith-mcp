@@ -104,12 +104,14 @@ def _init_tts(config: AppConfig):
         # for all sessions instead of ~1.5 GB per session).
         from engine_client import RemoteTTSEngine
         _tts_engine = RemoteTTSEngine()
-        _audio_player = AudioPlayer(config.tts.audio_player, config.tts.audio_output_device)
+        _audio_player = AudioPlayer(
+            config.tts.audio_player, config.tts.audio_output_device,
+            mute_provider=_effective_mute, volume_provider=_playback_gain,
+        )
         _speech_queue = SpeechQueue(
             _tts_engine, _audio_player,
             duck_media=config.tts.duck_media,
             phase_reporter=_report_floor_phase,
-            volume_provider=_playback_gain,
         )
         logger.info("TTS subsystem initialized (remote engine service)")
         return
@@ -118,12 +120,14 @@ def _init_tts(config: AppConfig):
 
     try:
         _tts_engine = KokoroEngine(config.tts.model_path, config.tts.voices_path)
-        _audio_player = AudioPlayer(config.tts.audio_player, config.tts.audio_output_device)
+        _audio_player = AudioPlayer(
+            config.tts.audio_player, config.tts.audio_output_device,
+            mute_provider=_effective_mute, volume_provider=_playback_gain,
+        )
         _speech_queue = SpeechQueue(
             _tts_engine, _audio_player,
             duck_media=config.tts.duck_media,
             phase_reporter=_report_floor_phase,
-            volume_provider=_playback_gain,
         )
         logger.info("TTS subsystem initialized")
     except TTSEngineError as e:
@@ -955,6 +959,8 @@ async def speak(name: str, text: str, speed: float = 1.0, block: bool = True) ->
             "duration_ms": round(result.duration_ms, 1),
             "synthesis_ms": round(result.synthesis_ms, 1),
         }
+        if result.stopped:
+            response["stopped"] = True  # mute engaged mid-utterance
     except asyncio.CancelledError:
         # User interrupted (Escape key) — stop audio immediately
         if _speech_queue is not None:
@@ -1153,6 +1159,7 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
     # Duck media while recording so the mic doesn't pick up playback
     # Skip if speak_then_listen already holds the duck
     paused_apps = duck() if (_config and _config.tts.duck_media and not _suppress_duck) else []
+    mute_watch_task = None
 
     try:
         loop = asyncio.get_running_loop()
@@ -1173,6 +1180,18 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
                 _play_ready_sound()
 
         ready_cb = _on_mic_ready
+
+        # Mid-recording mute watchdog: if a global mute engages while the
+        # mic is open (meeting starts mid-question), close the mic within
+        # ~0.5s instead of recording up to the full timeout.
+        async def _mute_watch():
+            while True:
+                if _effective_mute():
+                    _listen_cancel_event.set()
+                    return
+                await asyncio.sleep(0.5)
+
+        mute_watch_task = asyncio.create_task(_mute_watch())
 
         # Record audio with VAD
         audio = await _mic_capture.record(
@@ -1213,6 +1232,8 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
         logger.error(f"listen failed: {e}")
         return {"success": False, "error": "listen_failed", "message": str(e)}
     finally:
+        if mute_watch_task is not None:
+            mute_watch_task.cancel()
         if paused_apps:
             asyncio.create_task(_deferred_unduck(paused_apps))
         _listen_active = False
@@ -1287,7 +1308,7 @@ async def speak_then_listen(
             if voice and _tts_engine:
                 try:
                     result = _tts_engine.synthesize(nudge_text, voice, speed)
-                    _audio_player.play(result.samples, result.sample_rate, gain=_playback_gain())
+                    _audio_player.play(result.samples, result.sample_rate)
                     listen_result["nudge_spoken"] = True
                 except Exception:
                     pass
@@ -1873,7 +1894,7 @@ def _start_preheat_intro():
             result = _tts_engine.synthesize(f"{intro_name} here, ready to go.", intro_voice, 1.0)
             if _floor_enabled():
                 _voice_floor.set_phase("speak")  # actual audible playback
-            _audio_player.play(result.samples, result.sample_rate, gain=_playback_gain())
+            _audio_player.play(result.samples, result.sample_rate)
             logger.info(f"Preheat intro spoken: {intro_name}")
         except Exception as e:
             logger.warning(f"Preheat intro failed: {e}")

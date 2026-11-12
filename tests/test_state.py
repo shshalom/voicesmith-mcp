@@ -97,6 +97,104 @@ class TestApplyGain:
         assert apply_gain(samples, 1.0) is samples
 
 
+class FakeProc:
+    """Popen-like stub for the live-control loop."""
+    def __init__(self, exits_after_polls: int = 9999):
+        self.poll_count = 0
+        self.exits_after = exits_after_polls
+        self.killed = False
+        self.returncode = None
+
+    def poll(self):
+        self.poll_count += 1
+        if self.poll_count >= self.exits_after:
+            self.returncode = 0
+            return 0
+        return None
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+
+    def wait(self, timeout=None):
+        self.returncode = self.returncode if self.returncode is not None else 0
+
+
+class TestLivePlaybackControl:
+    """_wait_with_controls: mute kills mid-playback, volume pushes over IPC."""
+
+    def _player(self, mute_provider=None, volume_provider=None):
+        from tts.audio_player import AudioPlayer
+        player = AudioPlayer.__new__(AudioPlayer)  # skip __init__ (player detection)
+        player._player_command = "mpv"
+        player._audio_output_device = None
+        player._mute_provider = mute_provider
+        player._volume_provider = volume_provider
+        player._process = None
+        player._ipc_seq = 0
+        return player
+
+    def test_normal_exit(self):
+        player = self._player()
+        proc = FakeProc(exits_after_polls=3)
+        player._process = proc
+        assert player._wait_with_controls(ipc_conn=None) is False
+        assert proc.killed is False
+
+    def test_mute_engages_midplayback_kills(self):
+        player = self._player(mute_provider=lambda: True)
+        proc = FakeProc()
+        player._process = proc
+        assert player._wait_with_controls(ipc_conn=None) is True
+        assert proc.killed is True  # silenced within one poll (~150ms)
+
+    def test_mute_flips_on_after_a_few_polls(self):
+        polls = {"n": 0}
+        def mute():
+            polls["n"] += 1
+            return polls["n"] > 3  # user hits Mute All mid-utterance
+        player = self._player(mute_provider=mute)
+        proc = FakeProc()
+        player._process = proc
+        assert player._wait_with_controls(ipc_conn=None) is True
+        assert proc.killed is True
+
+    def test_volume_change_detected_and_sent(self):
+        """Integration through a real socketpair: mpv receives 'set volume 25'."""
+        import socket as socket_mod
+        volumes = [0.5, 0.5, 0.25, 0.25, 0.25]
+        player = self._player(volume_provider=lambda: volumes.pop(0) if volumes else 0.25)
+        proc = FakeProc(exits_after_polls=5)
+        player._process = proc
+
+        listener, writer = socket_mod.socketpair()
+        received = []
+        import threading
+        def reader():
+            while True:
+                data = listener.recv(1024)
+                if not data:
+                    break
+                received.append(data.decode())
+        t = threading.Thread(target=reader, daemon=True)
+        t.start()
+
+        assert player._wait_with_controls(ipc_conn=writer) is False
+        writer.close()
+        listener.close()
+        t.join(timeout=1)
+        assert any("set volume 25" in r for r in received)
+
+    def test_mute_errors_in_provider_are_ignored(self):
+        def broken():
+            raise RuntimeError("state file gone")
+        player = self._player(mute_provider=broken)
+        proc = FakeProc(exits_after_polls=3)
+        player._process = proc
+        assert player._wait_with_controls(ipc_conn=None) is False  # playback completes
+        assert proc.killed is False
+
+
 # ─── Server integration ───────────────────────────────────────────────────────
 
 
@@ -261,23 +359,59 @@ class TestVolume:
         assert result["error"] == "invalid_scope"
 
     @pytest.mark.asyncio
-    async def test_speech_queue_passes_gain_to_player(self, tmp_path):
-        """The queue asks the volume provider and hands the gain to play()."""
+    async def test_speech_queue_stops_remaining_chunks_when_muted(self):
+        """A muted mid-playback chunk aborts the utterance (stopped=True)."""
+        from unittest.mock import MagicMock
         from tts.speech_queue import SpeechQueue
+        from shared import SynthesisResult, PlaybackResult
+        import numpy as np
 
         engine = MagicMock()
         engine.synthesize.return_value = SynthesisResult(
-            samples=np.zeros(2400, dtype=np.float32), sample_rate=24000,
-            duration_ms=100.0, synthesis_ms=10.0,
+            samples=np.zeros(100, dtype=np.float32), sample_rate=24000,
+            duration_ms=50.0, synthesis_ms=5.0,
         )
         player = MagicMock()
-        player.play.return_value = PlaybackResult(success=True, duration_ms=100.0)
+        # First chunk: killed mid-playback (mute engaged)
+        player.play.return_value = PlaybackResult(success=True, duration_ms=50.0, stopped=True)
 
-        queue = SpeechQueue(engine, player, volume_provider=lambda: 0.25)
-        result = await queue._speak_blocking("Hello", "am_eric", 1.0)
+        # Long text → several chunks (chunk_text splits above 500 chars)
+        long_text = ("The quick brown fox jumps over the lazy dog. " * 20).strip()
+        assert len(long_text) > 500
+
+        queue = SpeechQueue(engine, player)
+        result = await queue._speak_blocking(long_text, "am_eric", 1.0)
 
         assert result.success is True
-        assert player.play.call_args.args[2] == 0.25  # gain passed through
+        assert result.stopped is True
+        # Only the first chunk was synthesized — the rest were skipped
+        assert engine.synthesize.call_count == 1
+        assert player.play.call_count == 1
+        args = player.play.call_args
+        assert len(args.args) == 2  # samples, sample_rate — no gain plumbing
+
+    @pytest.mark.asyncio
+    async def test_speech_queue_normal_multi_chunk(self):
+        from unittest.mock import MagicMock
+        from tts.speech_queue import SpeechQueue
+        from shared import SynthesisResult, PlaybackResult
+        import numpy as np
+
+        engine = MagicMock()
+        engine.synthesize.return_value = SynthesisResult(
+            samples=np.zeros(100, dtype=np.float32), sample_rate=24000,
+            duration_ms=50.0, synthesis_ms=5.0,
+        )
+        player = MagicMock()
+        player.play.return_value = PlaybackResult(success=True, duration_ms=50.0)
+
+        long_text = ("The quick brown fox jumps over the lazy dog. " * 20).strip()
+        queue = SpeechQueue(engine, player)
+        result = await queue._speak_blocking(long_text, "am_eric", 1.0)
+        assert result.success is True
+        assert result.stopped is False
+        assert engine.synthesize.call_count >= 2  # actually chunked
+        assert player.play.call_count == engine.synthesize.call_count
 
     @pytest.mark.asyncio
     async def test_status_reports_mute_and_volume(self, tmp_path):
