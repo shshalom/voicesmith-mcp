@@ -237,6 +237,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "/unmute": self._handle_unmute,
             "/mute_all": self._handle_mute_all,
             "/mute_subagents": self._handle_mute_subagents,
+            "/mute_mic": self._handle_mute_mic,
             "/volume": self._handle_volume,
             "/session_volume": self._handle_session_volume,
             "/t3_thread": self._handle_t3_thread,
@@ -270,6 +271,7 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
             "last_tool_call_age_s": round(time.time() - _last_tool_call),
             "muted": _muted,
             "effectively_muted": _effective_mute(),
+            "mic_muted": _effective_mic_mute(),
             "is_subagent": _session_is_subagent(),
             "volume": {
                 "session": _session_volume,
@@ -516,6 +518,16 @@ class _VoiceHTTPHandler(BaseHTTPRequestHandler):
         muted = bool(params.get("muted", True))
         state = update_state(mute_subagents=muted)
         logger.info(f"Mute-subagents set to {muted} via HTTP")
+        self._json_response(200, {"success": True, **state})
+
+    def _handle_mute_mic(self):
+        """Late-night mode: speech stays audible, mic stays closed."""
+        params = self._read_json_body()
+        if params is None:
+            return
+        muted = bool(params.get("muted", True))
+        state = update_state(mute_mic=muted)
+        logger.info(f"Mute-mic set to {muted} via HTTP")
         self._json_response(200, {"success": True, **state})
 
     def _handle_volume(self):
@@ -858,6 +870,9 @@ def _effective_mute() -> bool:
     - the shared "mute all" flag (meeting mode — applies to every session,
       including ones spawned after the flag was set)
     - the shared "mute subagents" flag, when this session is a subagent
+
+    Note: the shared "mute mic" flag is NOT here — it blocks the mic while
+    leaving speech audible, so it is checked by _effective_mic_mute().
     """
     if _muted:
         return True
@@ -867,6 +882,18 @@ def _effective_mute() -> bool:
     if state.get("mute_subagents") and _session_is_subagent():
         return True
     return False
+
+
+def _effective_mic_mute() -> bool:
+    """True when this session's microphone must stay closed right now.
+
+    Everything that mutes speech (see _effective_mute) also mutes the
+    mic, plus the shared "mute mic" flag — late-night mode: the user can
+    still hear agents, but never has to speak an answer.
+    """
+    if _effective_mute():
+        return True
+    return bool(read_state().get("mute_mic"))
 
 
 def _playback_gain() -> float:
@@ -1126,9 +1153,10 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
     if _stt_engine is None or _mic_capture is None:
         return {"success": False, "error": "stt_unavailable", "message": "STT engine not loaded"}
 
-    if _effective_mute():
+    if _effective_mic_mute():
         return {"success": False, "error": "muted",
-                "message": "Voice input is muted (session mute, mute-all, or subagent mute)"}
+                "message": "Microphone is muted (session mute, mute-all, or mute-mic). "
+                           "Fall back to text input."}
 
     if _listen_active:
         return {"success": False, "error": "mic_busy", "message": "Another listen call is in progress"}
@@ -1181,12 +1209,12 @@ async def listen(timeout: float = 15, prompt: str = "", silence_threshold: float
 
         ready_cb = _on_mic_ready
 
-        # Mid-recording mute watchdog: if a global mute engages while the
-        # mic is open (meeting starts mid-question), close the mic within
-        # ~0.5s instead of recording up to the full timeout.
+        # Mid-recording mute watchdog: if a global mute or mic-mute engages
+        # while the mic is open, close the mic within ~0.5s instead of
+        # recording up to the full timeout.
         async def _mute_watch():
             while True:
-                if _effective_mute():
+                if _effective_mic_mute():
                     _listen_cancel_event.set()
                     return
                 await asyncio.sleep(0.5)
@@ -1653,8 +1681,10 @@ async def status() -> dict:
             "session": _muted,
             "all": is_globally_muted(),
             "subagents": bool(read_state().get("mute_subagents")),
+            "mic": bool(read_state().get("mute_mic")),
             "is_subagent": _session_is_subagent(),
             "effective": _effective_mute(),
+            "listen_effective": _effective_mic_mute(),
         },
         "volume": {
             "session": _session_volume,

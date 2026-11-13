@@ -497,13 +497,14 @@ The old menu-bar "Mute All" POSTed to a snapshot of live sessions — anything s
 |---|---|
 | `mute_all` | Meeting mode — no session speaks or listens, wake word detection pauses, ready sounds and intros are suppressed. The menu bar's Mute All sets this (not a per-session loop). |
 | `mute_subagents` | Mutes agent-spawned sessions only. A session is a subagent when its bound T3 thread id contains `:` (T3 gives user-created threads plain UUIDs, agent-spawned children prefixed ids). Unbound/non-T3 sessions are treated as main threads. |
+| `mute_mic` | Late-night mode — speech stays audible, but every `listen` path refuses with a `muted` error (agents fall back to text), the mic watchdog closes any open mic within ~0.5 s, and wake word detection pauses. `speak`/`speak_then_listen` questions play aloud; the listen half falls back to text. |
 | `volume` | Global VoiceSmith playback gain, 0.0–1.0. Applied to the audio samples themselves, so it works regardless of which output device agents speak through — no device switching to adjust agent loudness. |
 
 Per-session controls remain: the `mute`/`unmute` tools (session-local), plus a per-session **volume override** (menu bar Session Activity slider, HTTP `POST /session_volume`, or the `set_volume(volume, scope="session")` tool) which wins over the global value; clearing it falls back to global. `set_volume(volume, scope="all")` sets the shared default from any agent.
 
 **Changes take effect on the audio that is currently playing**, not just the next utterance. During playback the player polls the shared state ~10x/s: a mute engaging kills the player process within ~150 ms (a mute caught before a chunk starts produces *zero* leaked audio via a pre-spawn check), and volume changes are pushed to mpv live over its IPC socket — so the menu bar's Mute All silences an agent mid-sentence and the volume slider bends the utterance that's already playing. mpv is required for live volume (afplay/aplay fall back to per-chunk gain, mute-kill still live). A mute during `listen` closes the mic within ~0.5 s via a watchdog on the cancel event, and a stopped utterance reports `"stopped": true` to the calling agent.
 
-A session is effectively muted when **any** of: its own mute, `mute_all`, or (`mute_subagents` ∧ it is a subagent). `speak` then returns success-silent (agents fall back to text), `listen` returns a `muted` error, the preheat intro and ready sounds are skipped, and the wake listener pauses. `status` reports all of it under `mute` and `volume`.
+A session is effectively muted (speech-side) when **any** of: its own mute, `mute_all`, or (`mute_subagents` ∧ it is a subagent) — `mute_mic` deliberately does **not** mute speech. The mic side uses `_effective_mic_mute()`: all of the speech-side mutes **plus** `mute_mic`. `speak` under a speech mute returns success-silent (agents fall back to text), `listen` under a mic mute returns a `muted` error, the preheat intro and ready sounds are skipped, and the wake listener pauses. `status` reports all of it under `mute` (`effective` = speech, `listen_effective` = mic) and `volume`.
 
 ---
 

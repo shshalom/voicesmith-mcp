@@ -29,7 +29,8 @@ def temp_state(tmp_path, monkeypatch):
 class TestServerState:
     def test_defaults_when_missing(self):
         state = ss.read_state()
-        assert state == {"mute_all": False, "mute_subagents": False, "volume": 1.0}
+        assert state == {"mute_all": False, "mute_subagents": False,
+                         "mute_mic": False, "volume": 1.0}
 
     def test_update_and_read_round_trip(self):
         ss.update_state(mute_all=True, volume=0.4)
@@ -48,7 +49,8 @@ class TestServerState:
     def test_corrupt_file_falls_back_to_defaults(self):
         ss._data_dir().mkdir(parents=True, exist_ok=True)
         (ss._data_dir() / "state.json").write_text("{not json")
-        assert ss.read_state() == {"mute_all": False, "mute_subagents": False, "volume": 1.0}
+        assert ss.read_state() == {"mute_all": False, "mute_subagents": False,
+                                   "mute_mic": False, "volume": 1.0}
 
     def test_volume_clamped(self):
         state = ss.update_state(volume=5.0)  # 1-100 treated as percent → 5%
@@ -315,7 +317,41 @@ def _setup(tmp_path, tts=True, stt=False, t3_thread_id=None):
 
 class TestEffectiveMute:
     @pytest.mark.asyncio
-    async def test_mute_all_mutes_speak(self, tmp_path):
+    async def test_mute_mic_blocks_listen_but_not_speak(self, tmp_path):
+        """Late-night mode: agents stay audible, mic never opens."""
+        server = _setup(tmp_path)
+        server._stt_engine = MagicMock()
+        server._mic_capture = MagicMock()
+
+        ss.update_state(mute_mic=True)
+
+        # Speech is NOT muted
+        assert server._effective_mute() is False
+        result = await server.speak("Eric", "Still audible", block=True)
+        assert result["success"] is True
+        assert result.get("muted") is None  # actually spoke
+
+        # The mic IS closed, with a clear fall-back-to-text message
+        assert server._effective_mic_mute() is True
+        listen = await server.listen(timeout=1)
+        assert listen["success"] is False
+        assert listen["error"] == "muted"
+        assert "text" in listen["message"]
+
+    @pytest.mark.asyncio
+    async def test_mute_mic_in_speak_then_listen(self, tmp_path):
+        """speak_then_listen: question plays aloud, listen falls back to text."""
+        server = _setup(tmp_path, tts=True, stt=True)
+        ss.update_state(mute_mic=True)
+
+        result = await server.speak_then_listen("Eric", "Should I merge?")
+        assert result["speak"]["success"] is True
+        assert result["speak"].get("muted") is None      # audible
+        assert result["listen"]["success"] is False
+        assert result["listen"]["error"] == "muted"      # mic closed
+
+    @pytest.mark.asyncio
+    async def test_mute_all_still_blocks_both(self, tmp_path):
         server = _setup(tmp_path)
         ss.update_state(mute_all=True)
 

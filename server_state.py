@@ -32,6 +32,7 @@ logger = get_logger("server-state")
 DEFAULTS = {
     "mute_all": False,
     "mute_subagents": False,
+    "mute_mic": False,   # Speech stays audible; every listen path refuses
     "volume": 1.0,
 }
 
@@ -96,6 +97,14 @@ def update_state(**fields) -> dict:
 
 def is_globally_muted() -> bool:
     return bool(read_state().get("mute_all"))
+
+
+def is_mic_blocked() -> bool:
+    """True when the microphone must stay closed: mute_all (meeting mode)
+    or the dedicated mute_mic flag (late-night mode — speech audible, but
+    no listen and no wake-word detection)."""
+    state = read_state()
+    return bool(state.get("mute_all")) or bool(state.get("mute_mic"))
 
 
 def clamp_volume(v) -> float:

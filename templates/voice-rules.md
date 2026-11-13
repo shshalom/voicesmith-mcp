@@ -29,7 +29,7 @@ You have access to voice tools via the VoiceSmith MCP server.
 
 ## Listening
 - Use `speak_then_listen` whenever you need user input — it combines speaking and opening the mic in one call.
-- If `listen` returns timeout or cancelled, fall back to requesting text input. Do not retry `listen`.
+- If `listen` returns muted, timeout, or cancelled, fall back to requesting text input. Do not retry `listen`.
 
 ## Shared Audio Channel
 - Multiple sessions share one speaker and one microphone. VoiceSmith serializes them: only one session speaks or listens at a time, and `speak_then_listen` holds the channel across both so nothing barges in between your question and the open mic.

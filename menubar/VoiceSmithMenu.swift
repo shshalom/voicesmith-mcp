@@ -233,6 +233,7 @@ class AppState: ObservableObject {
     @Published var statusCache: [Int: SessionStatus] = [:]
     @Published var isMuted = false          // global mute-all (shared state)
     @Published var muteSubagents = false   // shared: agent-spawned sessions only
+    @Published var muteMic = false         // shared: speech audible, mic closed
     @Published var globalVolume: Double = 1.0
     @Published var volumeDragging = false   // true while the volume slider is held
     @Published var duckMedia = false
@@ -371,6 +372,7 @@ class AppState: ObservableObject {
         let gs = readGlobalState()
         isMuted = gs["mute_all"] as? Bool ?? false
         muteSubagents = gs["mute_subagents"] as? Bool ?? false
+        muteMic = gs["mute_mic"] as? Bool ?? false
         // Never yank the volume binding while the user is mid-drag — the
         // poll would snap the slider back to the old value before the
         // release writes the new one.
@@ -460,6 +462,12 @@ class AppState: ObservableObject {
         let newMuted = !(readGlobalState()["mute_subagents"] as? Bool ?? false)
         writeGlobalState(["mute_subagents": newMuted])
         muteSubagents = newMuted
+    }
+
+    func toggleMuteMic() {
+        let newMuted = !(readGlobalState()["mute_mic"] as? Bool ?? false)
+        writeGlobalState(["mute_mic": newMuted])
+        muteMic = newMuted
     }
 
     func setGlobalVolume(_ v: Double) {
@@ -1422,6 +1430,9 @@ struct MenuPanel: View {
 
                 // Mute Subagents — children stay silent, main threads speak
                 toggleRow("Mute Subagents", icon: "person.2.slash", isOn: state.muteSubagents, action: state.toggleMuteSubagents)
+
+                // Mute Mic — speech audible, mic closed (late-night mode)
+                toggleRow("Mute Mic", icon: "mic.slash", isOn: state.muteMic, action: state.toggleMuteMic)
 
                 // VoiceSmith volume — applies to the agents' output device
                 // without touching the system device volume
