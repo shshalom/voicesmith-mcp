@@ -32,6 +32,7 @@ from shared import (
     get_logger,
 )
 from voice_floor import FloorBusyError, get_default_floor
+from server_state import is_mic_blocked
 
 logger = get_logger("wake-listener")
 
@@ -217,7 +218,12 @@ class WakeWordListener:
             # floor — e.g. a sibling session is speaking or listening.
             # Keeps the wake mic from capturing their TTS as a wake word
             # and from double-opening the mic.
-            while not self._stop_event.is_set() and get_default_floor().holder_info() is not None:
+            # Also pause while the mic must stay closed — "mute all"
+            # (meeting mode) or "mute mic" (late-night mode): no wake
+            # detection, no ready sound, no mic.
+            while (not self._stop_event.is_set()
+                   and (get_default_floor().holder_info() is not None
+                        or is_mic_blocked())):
                 with self._state_lock:
                     self._state = WakeState.YIELDED
                 time.sleep(0.2)
@@ -254,7 +260,7 @@ class WakeWordListener:
                     now = time.time()
                     if now - last_floor_check >= 1.0:
                         last_floor_check = now
-                        if get_default_floor().holder_info() is not None:
+                        if get_default_floor().holder_info() is not None or is_mic_blocked():
                             break
                     try:
                         chunk = audio_queue.get(timeout=0.2)
@@ -302,6 +308,13 @@ class WakeWordListener:
 
         with self._state_lock:
             self._state = WakeState.RECORDING
+
+        # Meeting mute or late-night mic mute: never record or transcribe.
+        if is_mic_blocked():
+            logger.info("Wake word detected but globally muted — ignoring")
+            with self._state_lock:
+                self._state = WakeState.LISTENING
+            return
 
         # Take the voice floor before recording: another session may be
         # speaking or listening. The user just said the wake word, so

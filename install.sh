@@ -216,7 +216,7 @@ echo -e "\n${BOLD}Step 2/6: Setting up Python environment...${RESET}"
 mkdir -p "$INSTALL_DIR"
 
 # Copy server files
-for f in server.py shared.py config.py voice_registry.py session_registry.py voice_floor.py engine_service.py engine_client.py requirements.txt; do
+for f in server.py shared.py config.py voice_registry.py session_registry.py voice_floor.py engine_service.py engine_client.py server_state.py requirements.txt; do
     [ -f "$SCRIPT_DIR/$f" ] && cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/"
 done
 for d in tts stt templates; do

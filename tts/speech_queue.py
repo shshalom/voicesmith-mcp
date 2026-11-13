@@ -23,7 +23,9 @@ class SpeechQueue:
     ) -> None:
         """Args:
         engine: TTS engine (local KokoroEngine or RemoteTTSEngine).
-        player: AudioPlayer for playback.
+        player: AudioPlayer for playback. The player owns volume and live
+            mute behavior (via its mute/volume providers) — the queue does
+            not plumb gain per chunk.
         duck_media: Whether to duck system media during playback.
         phase_reporter: Optional callable(str) told "synthesizing"/"speak"
             at the actual synthesis/playback boundaries of each chunk, so
@@ -117,6 +119,17 @@ class SpeechQueue:
                         duration_ms=total_duration_ms,
                         synthesis_ms=total_synthesis_ms,
                         error=playback_result.error,
+                    )
+
+                if playback_result.stopped:
+                    # Mute engaged mid-playback — skip any remaining chunks
+                    # rather than playing them into a meeting.
+                    return SpeakResult(
+                        success=True,
+                        voice=voice_id,
+                        duration_ms=total_duration_ms,
+                        synthesis_ms=total_synthesis_ms,
+                        stopped=True,
                     )
 
             return SpeakResult(

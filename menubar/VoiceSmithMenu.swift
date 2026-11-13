@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Darwin
 
 // MARK: - Data Models
 
@@ -19,6 +20,9 @@ struct SessionStatus: Codable {
     let port: Int?
     let pid: Int?
     let muted: Bool?
+    let effectively_muted: Bool?
+    let is_subagent: Bool?
+    let volume: SessionVolume?
     let listening: Bool?
     let uptime_s: Int?
     let last_tool_call_age_s: Int?
@@ -27,6 +31,11 @@ struct SessionStatus: Codable {
     let vad: ComponentStatus?
     let wake_word: WakeWordStatus?
     let queue_depth: Int?
+}
+
+struct SessionVolume: Codable {
+    let session: Double?   // per-session override; null = using global
+    let effective: Double? // what actually plays
 }
 
 struct ComponentStatus: Codable {
@@ -119,6 +128,7 @@ let dataDir = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".local/share/voicesmith-mcp")
 let sessionsFile = dataDir.appendingPathComponent("sessions.json")
 let configFile = dataDir.appendingPathComponent("config.json")
+let stateFile = dataDir.appendingPathComponent("state.json")
 let templatesDir = dataDir.appendingPathComponent("templates")
 
 let ideRulesPaths: [(name: String, path: URL)] = [
@@ -158,6 +168,45 @@ func httpPost(port: Int, path: String, body: [String: Any]? = nil, timeout: Time
     return result
 }
 
+// MARK: - Shared Global State (mute-all, mute-subagents, volume)
+// Mirrors server_state.py: state.json holds cross-session settings so they
+// apply to EVERY session — including ones spawned after the change.
+// Writers flock state.json.lock (the same lock file the Python servers
+// use) and replace the file atomically.
+
+func readGlobalState() -> [String: Any] {
+    let path = stateFile.path(percentEncoded: false)
+    guard FileManager.default.fileExists(atPath: path),
+          let data = try? Data(contentsOf: stateFile),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return ["mute_all": false, "mute_subagents": false, "volume": 1.0]
+    }
+    var state = json
+    if state["mute_all"] == nil { state["mute_all"] = false }
+    if state["mute_subagents"] == nil { state["mute_subagents"] = false }
+    if state["volume"] == nil { state["volume"] = 1.0 }
+    return state
+}
+
+func writeGlobalState(_ update: [String: Any]) {
+    let lockPath = stateFile.path(percentEncoded: false) + ".lock"
+    FileManager.default.createFile(atPath: lockPath, contents: nil)
+    let fd = open(lockPath, O_RDWR)
+    if fd >= 0 { flock(fd, LOCK_EX) }
+    defer { if fd >= 0 { flock(fd, LOCK_UN); close(fd) } }
+
+    var state = readGlobalState()
+    for (key, value) in update { state[key] = value }
+    state["volume"] = min(1.0, max(0.0, (state["volume"] as? Double) ?? 1.0))
+
+    let statePath = stateFile.path(percentEncoded: false)
+    let tmpPath = statePath + ".tmp"
+    if let data = try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted]),
+       FileManager.default.createFile(atPath: tmpPath, contents: data) {
+        rename(tmpPath, statePath)  // atomic replace, lockless readers stay safe
+    }
+}
+
 nonisolated func checkNpmVersion() -> String? {
     guard let url = URL(string: "https://registry.npmjs.org/voicesmith-mcp/latest") else { return nil }
     var request = URLRequest(url: url, timeoutInterval: 5)
@@ -182,7 +231,11 @@ class AppState: ObservableObject {
     @Published var sessions: [VoiceSession] = []
     @Published var selectedPort: Int?
     @Published var statusCache: [Int: SessionStatus] = [:]
-    @Published var isMuted = false
+    @Published var isMuted = false          // global mute-all (shared state)
+    @Published var muteSubagents = false   // shared: agent-spawned sessions only
+    @Published var muteMic = false         // shared: speech audible, mic closed
+    @Published var globalVolume: Double = 1.0
+    @Published var volumeDragging = false   // true while the volume slider is held
     @Published var duckMedia = false
     @Published var nudgeOnTimeout = false
     @Published var currentModelSize = "base"
@@ -306,12 +359,25 @@ class AppState: ObservableObject {
 
         // Update state from selected session
         if let port = selectedPort, let status = statusCache[port] {
-            isMuted = status.muted ?? false
             currentVoice = status.voice ?? ""
             if let stt = status.stt {
                 nudgeOnTimeout = stt.nudge_on_timeout ?? false
                 if let model = stt.model { currentModelSize = model.replacingOccurrences(of: "whisper-", with: "") }
             }
+        }
+
+        // Shared global state: mute-all, mute-subagents, volume.
+        // These live in state.json so they cover every session, including
+        // ones spawned after the flag was set — unlike a session snapshot.
+        let gs = readGlobalState()
+        isMuted = gs["mute_all"] as? Bool ?? false
+        muteSubagents = gs["mute_subagents"] as? Bool ?? false
+        muteMic = gs["mute_mic"] as? Bool ?? false
+        // Never yank the volume binding while the user is mid-drag — the
+        // poll would snap the slider back to the old value before the
+        // release writes the new one.
+        if !volumeDragging {
+            globalVolume = gs["volume"] as? Double ?? 1.0
         }
         readConfigFallback()
         if currentVoice.isEmpty, let port = selectedPort,
@@ -376,9 +442,42 @@ class AppState: ObservableObject {
     // MARK: - Actions
 
     func muteAll() {
-        let ep = isMuted ? "/unmute" : "/mute"
+        // Global meeting mute via the shared state file — applies to every
+        // NEW session, including ones spawned after this click (sub-agents).
+        let newMuted = !muteAllActive()
+        writeGlobalState(["mute_all": newMuted])
+        isMuted = newMuted
+        // Legacy belt-and-suspenders: sessions running pre-state-file code
+        // only know the per-session mute, so fan the flag out to them too.
+        let ep = newMuted ? "/mute" : "/unmute"
         for s in sessions { _ = httpPost(port: s.port, path: ep) }
-        isMuted.toggle()
+        poll()
+    }
+
+    private func muteAllActive() -> Bool {
+        return (readGlobalState()["mute_all"] as? Bool) ?? false
+    }
+
+    func toggleMuteSubagents() {
+        let newMuted = !(readGlobalState()["mute_subagents"] as? Bool ?? false)
+        writeGlobalState(["mute_subagents": newMuted])
+        muteSubagents = newMuted
+    }
+
+    func toggleMuteMic() {
+        let newMuted = !(readGlobalState()["mute_mic"] as? Bool ?? false)
+        writeGlobalState(["mute_mic": newMuted])
+        muteMic = newMuted
+    }
+
+    func setGlobalVolume(_ v: Double) {
+        globalVolume = v
+        writeGlobalState(["volume": v])
+    }
+
+    func setSessionVolume(_ port: Int, _ v: Double) {
+        _ = httpPost(port: port, path: "/session_volume", body: ["volume": v])
+        poll()
     }
 
     func muteSession(_ port: Int) {
@@ -876,6 +975,40 @@ class AppState: ObservableObject {
 
 // MARK: - Activity Sparkline
 
+/// Per-session volume slider in the Session Activity window.
+/// Shows the session's own override, or the effective (global) volume when
+/// it has none. Posts the value to the session's /session_volume endpoint.
+struct SessionVolumeSlider: View {
+    let port: Int
+    let sessionVolume: Double?   // nil = no override, using global
+    let effective: Double?       // what actually plays right now
+    @State private var value: Double = 1.0
+    @State private var loaded = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Slider(value: $value, in: 0...1) { editing in
+                if !editing {
+                    _ = httpPost(port: port, path: "/session_volume", body: ["volume": value])
+                }
+            }
+            .frame(width: 110)
+            Text("\(Int(value * 100))%")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(width: 30, alignment: .trailing)
+        }
+        .help("Session volume (drags the session's own volume; the slider in the menu bar sets the global default)")
+        .onAppear {
+            if !loaded {
+                // Show the effective volume (own override if set, else global)
+                value = sessionVolume ?? effective ?? 1.0
+                loaded = true
+            }
+        }
+    }
+}
+
 struct ActivitySparkline: View {
     let points: [ActivityPoint]
     let height: CGFloat = 32
@@ -1022,6 +1155,13 @@ struct SessionCard: View {
                 .fixedSize()
 
                 Spacer()
+
+                // Per-session volume
+                SessionVolumeSlider(
+                    port: session.port,
+                    sessionVolume: status?.volume?.session,
+                    effective: status?.volume?.effective
+                )
 
                 // Mute toggle
                 Button(action: { state.muteSession(session.port) }) {
@@ -1280,12 +1420,40 @@ struct MenuPanel: View {
 
                 Divider().padding(.vertical, 4)
 
-                // Mute All
+                // Mute All — global, applies to every session including
+                // ones spawned after the click (sub-agents during a meeting)
                 menuButton(
                     state.isMuted ? "Unmute All" : "Mute All",
                     icon: state.isMuted ? "speaker.wave.2.fill" : "speaker.slash.fill",
                     action: state.muteAll
                 )
+
+                // Mute Subagents — children stay silent, main threads speak
+                toggleRow("Mute Subagents", icon: "person.2.slash", isOn: state.muteSubagents, action: state.toggleMuteSubagents)
+
+                // Mute Mic — speech audible, mic closed (late-night mode)
+                toggleRow("Mute Mic", icon: "mic.slash", isOn: state.muteMic, action: state.toggleMuteMic)
+
+                // VoiceSmith volume — applies to the agents' output device
+                // without touching the system device volume
+                HStack {
+                    Image(systemName: state.globalVolume <= 0.001 ? "speaker.slash.fill"
+                        : state.globalVolume < 0.5 ? "speaker.wave.1.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 13))
+                        .frame(width: 16)
+                        .foregroundColor(.secondary)
+                    Slider(value: $state.globalVolume, in: 0...1) { editing in
+                        state.volumeDragging = editing
+                        if !editing {
+                            state.setGlobalVolume(state.globalVolume)
+                        }
+                    }
+                    Text("\(Int(state.globalVolume * 100))%")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .frame(width: 34, alignment: .trailing)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 5)
 
                 Divider().padding(.vertical, 4)
 

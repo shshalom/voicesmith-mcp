@@ -57,12 +57,17 @@ def audio_player():
 
 @pytest.fixture
 def mock_popen():
-    """Provide a mock subprocess.Popen that succeeds."""
+    """Provide a mock subprocess.Popen that succeeds.
+
+    poll() plays along with the live-control loop: one "still playing"
+    poll, then "exited". Tests that need failure semantics set
+    mock_proc.returncode themselves (the exit path reads the attribute).
+    """
     with patch("subprocess.Popen") as mock_cls:
         mock_proc = MagicMock()
         mock_proc.returncode = 0
         mock_proc.wait.return_value = None
-        mock_proc.poll.return_value = None
+        mock_proc.poll.side_effect = [None, 0]
         mock_cls.return_value = mock_proc
         yield mock_cls, mock_proc
 
@@ -214,14 +219,17 @@ class TestAudioPlayer:
         assert result.success is True
         assert result.duration_ms >= 0
 
-        # Verify Popen was called with mpv command
+        # Verify Popen was called with the mpv command, live-volume knobs
+        # inserted before the file path
         call_args = mock_cls.call_args[0][0]
         assert call_args[0] == "mpv"
         assert call_args[1] == "--no-terminal"
         assert call_args[2] == "--no-video"
-        assert call_args[3].endswith(".wav")
+        assert "--volume=100" in call_args  # no providers → unity initial gain
+        assert any(a.startswith("--input-ipc-server=") for a in call_args)
+        wav_arg = next(a for a in call_args if str(a).endswith(".wav"))
         # Temp file should have been cleaned up
-        assert not Path(call_args[3]).exists()
+        assert not Path(wav_arg).exists()
 
     def test_play_reports_failure_on_nonzero_exit(self, audio_player, audio_samples, mock_popen):
         mock_cls, mock_proc = mock_popen
@@ -240,7 +248,8 @@ class TestAudioPlayer:
 
         # Temp file should still be cleaned up even on failure
         call_args = mock_cls.call_args[0][0]
-        assert not Path(call_args[3]).exists()
+        wav_arg = next(a for a in call_args if str(a).endswith(".wav"))
+        assert not Path(wav_arg).exists()
 
     def test_stop_kills_process(self, audio_player):
         mock_proc = MagicMock()
